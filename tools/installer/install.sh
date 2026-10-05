@@ -6,6 +6,7 @@
 #   ./install.sh                 find the SD card, then install
 #   ./install.sh --sd /media/me/POCKET
 #   ./install.sh --dry-run       show what would be copied, change nothing
+#   ./install.sh --tag msu1-test-10   download that release (outside a release zip only)
 #
 # Double-click: install-linux.desktop opens this in a terminal. On Windows use install.bat.
 #
@@ -22,11 +23,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 SD=""
 DRY_RUN=0
+TAG=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--sd) SD="${2:-}"; shift 2 ;;
 		--sd=*) SD="${1#--sd=}"; shift ;;
 		--dry-run|-n) DRY_RUN=1; shift ;;
+		--tag) TAG="${2:-}"; shift 2 ;;
+		--tag=*) TAG="${1#--tag=}"; shift ;;
 		-h|--help) sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "unknown option: $1 (see --help)" >&2; exit 1 ;;
 	esac
@@ -58,9 +62,17 @@ else
 	command -v curl >/dev/null || die "curl is needed to download the release"
 	command -v unzip >/dev/null || die "unzip is needed to unpack the release"
 	TMP="$(mktemp -d)"
-	# newest release that carries the zip, pre-releases included
-	url="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" \
-		| grep -o "https://[^\"]*/releases/download/[^\"]*/$CORE.zip" | head -1)" || true
+	if [ -n "$TAG" ]; then
+		url="https://github.com/$REPO/releases/download/$TAG/$CORE.zip"
+	else
+		# The API lists releases by tag name (msu1-test-9 before msu1-test-10): take the most
+		# recently published one that carries the zip, pre-releases included. Each release's
+		# published_at comes before its assets.
+		url="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" \
+			| grep -o "\"published_at\": *\"[^\"]*\"\|https://[^\"]*/releases/download/[^\"]*/$CORE.zip" \
+			| awk -F'"' '/published_at/ { t = $4; next } { print t, $0 }' \
+			| sort -r | head -1 | cut -d' ' -f2)" || true
+	fi
 	[ -n "$url" ] || die "could not find a release of $REPO with $CORE.zip"
 	say "Downloading $url"
 	curl -fL --progress-bar -o "$TMP/core.zip" "$url" || die "download failed"

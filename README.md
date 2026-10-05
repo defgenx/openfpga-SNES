@@ -60,7 +60,7 @@ The homebrew MSU-1 chip (CD-quality audio tracks and a streamed data file) is su
 ...
 ```
 
-To try it without touching the regular core, install the test build as a separate core, `defgenx.SNESMSU`. Unzip `defgenx.SNESMSU.zip` from the [releases](https://github.com/defgenx/openfpga-SNES/releases), then run `install.bat` on Windows, `install-linux.desktop` on Linux, or `./install.sh` in a terminal. To package one from a bitstream, use `tools/package-msu.sh`.
+To try it without touching the regular core, install the test build as a separate core, `defgenx.SNESMSU`. Unzip `defgenx.SNESMSU.zip` from the [releases](https://github.com/defgenx/openfpga-SNES/releases), then run `install.bat` on Windows, `install-linux.desktop` on Linux, or `./install.sh` in a terminal. Run from a clone instead (`tools/installer/`), the installers download the most recently published release; `--tag <tag>` (`-Tag` in PowerShell) picks another. To package one from a bitstream, use `tools/package-msu.sh`.
 
 MSU-1 is enabled when `<rom>.msu` exists. A data file up to 16MB is copied to memory at boot (expect a short black screen for large ones). A larger one, such as an FMV game's video, is streamed from the SD card while the game plays. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
 

@@ -14,10 +14,12 @@
     .\install.ps1
     .\install.ps1 -SD E:\
     .\install.ps1 -DryRun
+    .\install.ps1 -Tag msu1-test-10   # download that release (outside a release zip only)
 #>
 [CmdletBinding()]
 param(
     [string]$SD = "",
+    [string]$Tag = "",
     [switch]$DryRun
 )
 
@@ -51,12 +53,17 @@ try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("snesmsu-" + [Guid]::NewGuid())
         New-Item -ItemType Directory -Path $Tmp | Out-Null
-        # newest release that carries the zip, pre-releases included
-        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=100" -Headers @{ "User-Agent" = "snesmsu-installer" }
         $url = $null
-        foreach ($r in $releases) {
-            $asset = $r.assets | Where-Object { $_.name -eq "$Core.zip" } | Select-Object -First 1
-            if ($asset) { $url = $asset.browser_download_url; break }
+        if ($Tag) {
+            $url = "https://github.com/$Repo/releases/download/$Tag/$Core.zip"
+        } else {
+            # The API lists releases by tag name (msu1-test-9 before msu1-test-10): take the most
+            # recently published one that carries the zip, pre-releases included
+            $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=100" -Headers @{ "User-Agent" = "snesmsu-installer" }
+            foreach ($r in ($releases | Sort-Object { [DateTime]$_.published_at } -Descending)) {
+                $asset = $r.assets | Where-Object { $_.name -eq "$Core.zip" } | Select-Object -First 1
+                if ($asset) { $url = $asset.browser_download_url; break }
+            }
         }
         if (-not $url) { Fail "could not find a release of $Repo with $Core.zip" }
         Write-Host "Downloading $url"
