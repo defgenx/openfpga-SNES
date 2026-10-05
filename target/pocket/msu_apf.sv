@@ -77,6 +77,8 @@ module msu_apf #(
     // Audio sector read: 1024 bytes at sector * 1024
     input wire sector_req_toggle,
     input wire [21:0] sector_num,
+    // msu_audio is refilling its FIFO: more sector requests follow (clk_sys level)
+    input wire audio_refill,
 
     // Streaming (.msu larger than DATA_MAX_SIZE): seek request toggle + offset in, response
     // once STREAM_LEAD bytes past it are in SDRAM; the reader's position on request
@@ -187,6 +189,7 @@ module msu_apf #(
   reg [2:0] pos_ack_s = 0;
   reg [2:0] copy_done0_s = 0;
   reg [2:0] copy_done1_s = 0;
+  reg [2:0] audio_refill_s = 0;
   reg track_req_seen = 0;
   reg sector_req_seen = 0;
   reg data_seek_seen = 0;
@@ -198,6 +201,7 @@ module msu_apf #(
     pos_ack_s <= {pos_ack_s[1:0], pos_ack_toggle};
     copy_done0_s <= {copy_done0_s[1:0], copy_done_toggle[0]};
     copy_done1_s <= {copy_done1_s[1:0], copy_done_toggle[1]};
+    audio_refill_s <= {audio_refill_s[1:0], audio_refill};
     endian_s <= {endian_s[1:0], bridge_endian_little};
   end
 
@@ -356,6 +360,11 @@ module msu_apf #(
   reg [5:0] fill_c = 0;
   reg [4:0] prev_state = 0;
   wire settled = prev_state == state;
+  // APF caches file fragments for the last-accessed slot only, and re-finding a position in a
+  // large .msu after a .pcm read costs tens of ms. During an audio refill burst, .msu reads
+  // wait for the next sector request, up to 2^17 cycles (~1.8ms) after the last sector
+  reg [16:0] audio_hold = 0;
+  wire audio_burst = audio_refill_s[2] && audio_hold != 0;
   always @(posedge clk_74a) begin
     prev_state <= state;
     stream_base <= stream_base_c;
@@ -415,6 +424,8 @@ module msu_apf #(
       preloading <= 0;
       probe_status <= 0;
     end
+
+    if (audio_hold != 0) audio_hold <= audio_hold - 1'd1;
 
     if (ioctl_download) quiet <= 0;
     else if (~&quiet) quiet <= quiet + 1'd1;
@@ -478,7 +489,7 @@ module msu_apf #(
           seek_waiting <= 0;
           data_seek_resp_toggle <= data_seek_seen;
           state <= S_SETTLE;
-        end else if (stream_mode && bank_free && more_to_fetch) begin
+        end else if (stream_mode && bank_free && more_to_fetch && !audio_burst) begin
           // Ask where the reader is, then decide whether to fetch the next chunk
           pos_req_toggle <= ~pos_req_toggle;
           state <= S_POS_WAIT;
@@ -762,7 +773,10 @@ module msu_apf #(
             fetch_end <= fetch_end + (cur_bank ? pend_pages1 : pend_pages0);
             cur_bank <= ~cur_bank;
             state <= preloading ? S_PRELOAD : S_IDLE;
-          end else state <= S_IDLE;
+          end else begin
+            if (op == OP_SECTOR) audio_hold <= {17{1'b1}};
+            state <= S_IDLE;
+          end
         end
       end
 

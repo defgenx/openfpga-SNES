@@ -682,6 +682,7 @@ module core_top (
 
   wire msu_stream_mode;
   wire [1:0] msu_seek_slowest;
+  wire msu_audio_refill;
   wire msu_stream_underrun;
   wire [5:0] msu_stream_fill;
   wire msu_data_seek_req_toggle;
@@ -739,6 +740,7 @@ module core_top (
 
       .sector_req_toggle(msu_sector_req_toggle),
       .sector_num(msu_sector_req_num),
+      .audio_refill(msu_audio_refill),
 
       .stream_mode(msu_stream_mode),
       .stream_underrun(msu_stream_underrun),
@@ -1107,6 +1109,7 @@ module core_top (
       .msu_pos_value(msu_pos_value),
       .msu_pos_seeking(msu_pos_seeking),
       .msu_seek_slowest(msu_seek_slowest),
+      .msu_audio_refill(msu_audio_refill),
 
       .msu_copy_req_toggle(msu_copy_req_toggle),
       .msu_copy_region(msu_copy_region),

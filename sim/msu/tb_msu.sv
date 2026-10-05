@@ -246,6 +246,7 @@ module tb_msu;
       .track_size(track_size),
       .sector_req_toggle(sector_req_toggle),
       .sector_num(sector_num),
+      .audio_refill(audio_refill),
       .stream_mode(stream_mode),
       .stream_underrun(stream_underrun),
       .data_seek_req_toggle(seek_req_t),
@@ -376,6 +377,7 @@ module tb_msu;
   );
 
   wire [15:0] msu_l, msu_r;
+  wire audio_refill;
   msu_audio audio (
       .reset(reset),
       .clk(clk_sys),
@@ -397,6 +399,7 @@ module tb_msu;
       .resume_sector(m_resume_sector),
       .audio_loop_index(m_loop_index),
       .resume_loop_index(m_resume_loop_index),
+      .audio_refill(audio_refill),
       .audio_l(msu_l),
       .audio_r(msu_r)
   );
@@ -646,8 +649,10 @@ module tb_msu;
   ////////////////////////////////////////////////////////////////////////////
   // SNES CPU side
 
+  // A frozen console (store.stall) makes no bus accesses
   task automatic cpu_write(input [2:0] r, input [7:0] v);
     @(posedge clk_sys);
+    while (store.stall) @(posedge clk_sys);
     cpu_addr <= 24'h002000 | r;
     cpu_dout <= v;
     cpu_wr_n <= 0;
@@ -661,6 +666,7 @@ module tb_msu;
 
   task automatic cpu_read(input [2:0] r, output [7:0] v);
     @(posedge clk_sys);
+    while (store.stall) @(posedge clk_sys);
     cpu_addr <= 24'h002000 | r;
     cpu_rd_n <= 0;
     repeat (3) @(posedge clk_sys);
@@ -675,8 +681,6 @@ module tb_msu;
     integer n;
     n = 0;
     do begin
-      // A frozen console does not poll
-      while (store.stall) @(posedge clk_sys);
       cpu_read(0, st);
       n = n + 1;
       if (n > 200000) begin
@@ -742,7 +746,11 @@ module tb_msu;
   // The store freezes the console during slow seeks: the game's poll loop does not run then,
   // so frozen time does not count against its timeout
   realtime stall_t0, stall_acc = 0, stall_max = 0, stall_acc0;
-  always @(posedge store.stall) stall_t0 = $realtime;
+  integer stalls = 0;
+  always @(posedge store.stall) begin
+    stall_t0 = $realtime;
+    stalls = stalls + 1;
+  end
   always @(negedge store.stall) begin
     stall_acc = stall_acc + ($realtime - stall_t0);
     if ($realtime - stall_t0 > stall_max) stall_max = $realtime - stall_t0;
@@ -882,8 +890,8 @@ module tb_msu;
       while ($realtime - t0 < 16_667_000.0) @(posedge clk_sys);
     end
     cpu_write(7, 8'h00);
-    $display("[%0t] video: %0d frames of %0dKB at 60Hz (%0d KB/s), %0d slot switches, %0d samples", $time, f,
-             VIDEO_KB, VIDEO_KB * 60, slot_switches, cap_count);
+    $display("[%0t] video: %0d frames of %0dKB at 60Hz (%0d KB/s), %0d freezes (%0.1f ms total), %0d slot switches, %0d samples",
+             $time, f, VIDEO_KB, VIDEO_KB * 60, stalls, stall_acc / 1e6, slot_switches, cap_count);
   endtask
 
   // Header and chapter pointer at the file start, then per frame: the chapter's frame table,
@@ -916,8 +924,8 @@ module tb_msu;
       srb_read(frame + 5000, 256);
     end
     cpu_write(7, 8'h00);
-    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us of game time (budget %0d us), longest freeze %0.1f us, %0d slot switches, %0d samples",
-             $time, seek_max / 1000.0, SEEK_BUDGET_US, stall_max / 1000.0, slot_switches, cap_count);
+    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us of game time (budget %0d us), %0d freezes (%0.1f ms total, longest %0.1f us), %0d slot switches, %0d samples",
+             $time, seek_max / 1000.0, SEEK_BUDGET_US, stalls, stall_acc / 1e6, stall_max / 1000.0, slot_switches, cap_count);
     if (seek_max > SEEK_BUDGET_US * 1000.0) begin
       $display("FAIL: a seek took longer than the game allows");
       errors = errors + 1;

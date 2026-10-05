@@ -181,6 +181,11 @@ module msu_sdram_store #(
   reg [1:0] pending = 0;
   reg [1:0] filled = 0;
   reg [23:0] base0 = 0, base1 = 0;  // the ring only uses the low 24 bits of the file offset
+  // Streaming: file offset where each region's buffered data ends, from the chunks copied
+  // into it; the reader is frozen before it gets there (see stall)
+  reg [29:0] fbase0 = 0, fbase1 = 0, copy_cur_fbase = 0;
+  reg [29:0] avail_end0 = 0, avail_end1 = 0;
+  wire [29:0] avail_end = read_region ? avail_end1 : avail_end0;
   reg region0 = 0, region1 = 0;
   reg copy_cur_region = 0;
   reg [CHUNK_WORD_BITS+2:0] len0 = 0, len1 = 0;
@@ -205,14 +210,28 @@ module msu_sdram_store #(
   reg [2:0] pos_req_s = 0;
   reg stream_seek_wait = 0;
   reg last_was_read = 0;
-  // clk_sys is ~21.3MHz: 5ms, 10ms, 30ms, and a 1.5s cap
-  localparam [25:0] STALL_AFTER = 26'd106_000;
+  // clk_sys is ~21.3MHz: 20ms (the game allows ~30ms per seek), 10ms, 30ms, and a 1.5s cap
+  localparam [25:0] STALL_AFTER = 26'd426_000;
   localparam [25:0] SLOW_10MS = 26'd213_000;
   localparam [25:0] SLOW_30MS = 26'd640_000;
   localparam [25:0] STALL_MAX = 26'd32_000_000;
   reg [25:0] seek_timer = 0;
-  assign stall = stream_seek_wait && seek_timer >= STALL_AFTER && seek_timer < STALL_MAX;
+  // Sequential reads: freeze before the reader passes the buffered data (avail_end), once the
+  // first streaming seek has set up a window. The word after the reader's must be in SDRAM
+  // too, as the prefetch reads it; MSU.sv only moves rd_addr with rd_seek, which gates this
+  reg stream_armed = 0;
+  reg seek_active = 0;
+  reg seek_pending = 0;
+  wire starving = stream_mode && stream_armed && !msu_data_download && !rd_seek && !seek_pending
+      && !seek_active && !stream_seek_wait && rd_addr[29:0] + 30'd4 > avail_end;
+  reg [25:0] starve_timer = 0;
+  assign stall = stream_seek_wait && seek_timer >= STALL_AFTER && seek_timer < STALL_MAX
+      || starving && starve_timer < STALL_MAX;
   always @(posedge clk_sys) begin
+    if (!stream_mode) stream_armed <= 0;
+    else if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) stream_armed <= 1;
+    if (!starving) starve_timer <= 0;
+    else if (starve_timer != STALL_MAX) starve_timer <= starve_timer + 1'd1;
     if (!stream_seek_wait) seek_timer <= 0;
     else if (seek_timer != STALL_MAX) seek_timer <= seek_timer + 1'd1;
     if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) begin
@@ -253,13 +272,11 @@ module msu_sdram_store #(
   localparam DST_CUR = 0;
   localparam DST_NEXT = 1;
   reg dst = DST_CUR;
-  reg seek_active = 0;
-  reg seek_pending = 0;
   reg old_seek = 0;
 
   // The reader crossed into the prefetched word: shift it in and fetch the one after
   wire prefetch_go = st == ST_IDLE && !msu_data_download && !seek_active && next_valid
-      && rd_word == wrap(cur_word + 1'd1);
+      && rd_word == wrap(cur_word + 1'd1) && !starving;
   wire copy_go = st == ST_IDLE && copying && copy_q_ok && copy_word_ready && !prefetch_go;
   // SNI word of the buffered word being copied (copy_cur_base is 4-byte aligned)
   wire [22:0] copy_sni_word = wrap_in(copy_cur_region, copy_cur_base[23:1] + {copy_idx, 1'b0} + copy_half);
@@ -279,6 +296,7 @@ module msu_sdram_store #(
     if (req0_s[2] != req_seen[0]) begin
       req_seen[0] <= req0_s[2];
       base0 <= copy_base[23:0];
+      fbase0 <= copy_base[29:0];
       region0 <= copy_region;
       len0 <= copy_len;
       arrived0 <= 0;
@@ -288,6 +306,7 @@ module msu_sdram_store #(
     if (req1_s[2] != req_seen[1]) begin
       req_seen[1] <= req1_s[2];
       base1 <= copy_base[23:0];
+      fbase1 <= copy_base[29:0];
       region1 <= copy_region;
       len1 <= copy_len;
       arrived1 <= 0;
@@ -314,11 +333,14 @@ module msu_sdram_store #(
       copy_idx <= 0;
       copy_half <= 0;
       copy_cur_base <= eng_bank ? base1 : base0;
+      copy_cur_fbase <= eng_bank ? fbase1 : fbase0;
       copy_cur_region <= eng_bank ? region1 : region0;
       copy_left <= ((eng_bank ? len1 : len0) + 2'd3) >> 2;
       copy_q_ok <= 0;
     end else if (copying && copy_left == 0) begin
       copying <= 0;
+      if (copy_cur_region) avail_end1 <= copy_cur_fbase + (eng_bank ? len1 : len0);
+      else avail_end0 <= copy_cur_fbase + (eng_bank ? len1 : len0);
       pending[eng_bank] <= 0;
       copy_done_toggle[eng_bank] <= req_seen[eng_bank];
       eng_bank <= ~eng_bank;

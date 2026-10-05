@@ -123,11 +123,20 @@ streamed:
   so a data read after a `.pcm` read walks the `.msu` cluster chain again; an open plus a read
   takes ~30ms on hardware (measured by the openFPGA Mega CD core), and firmware events such as
   plugging in USB power stop bridge service for hundreds of ms. Once a streaming seek has waited
-  `STALL_AFTER` (5ms), `msu_sdram_store` raises `stall`, which drives the SNES `enable` in
+  `STALL_AFTER`, `msu_sdram_store` raises `stall`, which drives the SNES `enable` in
   `main.v` low: CPU, PPU, SMP and DSP freeze together (the CPU keeps its own H/V counters, so it
   cannot freeze alone), video output pauses, and MSU-1 audio and the fetch path keep running.
-  The game's poll loop does not run while frozen, so it never sees more than ~5ms. `STALL_MAX`
-  (1.5s) releases a seek that never completes.
+  The freeze starts after `STALL_AFTER` (20ms; the game allows ~30ms), so seeks that complete
+  sooner never freeze. `STALL_MAX` (1.5s) releases a seek that never completes.
+- **Freeze on underrun:** after the first streaming seek, the store also freezes the console
+  when sequential reads reach `avail_end`, the end of the data copied into the reader's region
+  (from each chunk's `copy_base` + `copy_len`), and holds the prefetch meanwhile, so the game
+  never reads data that has not arrived.
+- **Audio bursts:** `msu_audio`'s FIFO is 16KB (~93ms). It refills from half full until full
+  (`audio_refill`), so sector requests come back to back, and `msu_apf` holds `.msu` read-ahead
+  for up to ~1.8ms after each sector while the refill lasts: the slot changes about twice per
+  refill instead of around every sector. A track that does not repeat stops once the FIFO has
+  played out (upstream stopped as soon as the last sector was fetched).
 - **Reader position:** `msu_apf` polls it (`pos_req_toggle`) to decide on read-ahead. `MSU.sv`
   moves the address as soon as the game writes a seek, so the store flags positions taken
   during a seek (`pos_seeking`), and they are ignored.

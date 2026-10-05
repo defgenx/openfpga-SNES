@@ -177,6 +177,7 @@ module MAIN_SNES (
     output wire [31:0] msu_pos_value,
     output wire msu_pos_seeking,
     output wire [1:0] msu_seek_slowest,  // debug overlay, see msu_sdram_store
+    output wire msu_audio_refill,  // msu_audio wants a burst of sectors, see msu_apf
 
     // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
     input wire [1:0] msu_copy_req_toggle,
@@ -1186,6 +1187,7 @@ module MAIN_SNES (
           .audio_loop_index(msu_audio_loop_index),
           .resume_loop_index(msu_resume_loop_index),
 
+          .audio_refill(msu_audio_refill),
           .audio_l(msu_l),
           .audio_r(msu_r)
       );
@@ -1232,6 +1234,7 @@ module MAIN_SNES (
       assign msu_track_mounting = 0;
       assign msu_track_missing = 0;
       assign msu_stall = 0;
+      assign msu_audio_refill = 0;
       assign msu_seek_slowest = 0;
       assign msu_audio_size = 0;
       assign msu_audio_ack = 0;

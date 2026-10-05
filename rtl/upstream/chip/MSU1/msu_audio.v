@@ -29,6 +29,9 @@ module msu_audio
 	output     [31:0] audio_loop_index,
 	input      [31:0] resume_loop_index,
 
+	// Pocket: the FIFO is refilling (below half, until full), so sector requests come in a
+	// burst; the APF side keeps to the audio file meanwhile
+	output reg        audio_refill,
 	output     [15:0] audio_l,
 	output     [15:0] audio_r
 );
@@ -38,6 +41,7 @@ localparam WAITING_ACK_STATE      = 1;
 localparam PLAYING_STATE          = 2;
 localparam PLAYING_CHECKS_STATE   = 3;
 localparam END_SECTOR_STATE       = 4;
+localparam DRAIN_STATE            = 5;  // Pocket: play out the FIFO before stopping
 
 reg [31:0] loop_index;
 assign     audio_loop_index = loop_index;
@@ -53,8 +57,13 @@ always @(posedge clk) begin
 		audio_seek <= 0;
 		fifo_wren <= 0;
 		audio_req <= 0;
+		audio_refill <= 0;
 	end
 	else begin
+		// Refill in bursts: from half full until the next sector would not fit
+		if (state == WAITING_FOR_PLAY_STATE || state == DRAIN_STATE) audio_refill <= 0;
+		else if (fifo_usedw < 12'd2048) audio_refill <= 1;
+		else if (fifo_usedw >= 12'd3840) audio_refill <= 0;
 
 		// Set/reset pulsed signals
 		ctl_stop <= 0;
@@ -109,10 +118,10 @@ always @(posedge clk) begin
 						fifo_wren <= (audio_sector || data_cnt[7:1]);
 					end
 					 
-					if (!audio_ack && fifo_usedw < 768) begin
+					if (!audio_ack && fifo_usedw < 12'd3840 && (audio_refill || fifo_usedw < 12'd2048)) begin
 						// We've received a full sector
 						// Only add new sectors if we haven't filled the buffer
-						// 1024 dwords in the fifo - sector size of 256 dwords
+						// 4096 dwords in the fifo - sector size of 256 dwords
 						state <= PLAYING_CHECKS_STATE;
 					end
 				end
@@ -135,9 +144,9 @@ always @(posedge clk) begin
 					partial_sector_state <= 0;
 					// Handle a full last sector
 					if (!ctl_repeat) begin
-						// Stop, no loop
-						ctl_stop <= 1;
-						state <= WAITING_FOR_PLAY_STATE;
+						// Stop, no loop, once the queued samples have played: the 16KB FIFO
+						// holds up to ~93ms of them
+						state <= DRAIN_STATE;
 					end
 					else begin
 						// Loop, jump back to the loop sector
@@ -155,6 +164,11 @@ always @(posedge clk) begin
 					audio_sector <= audio_sector + 1'd1;
 					audio_req <= 1;
 					state <= WAITING_ACK_STATE;
+				end
+			DRAIN_STATE:
+				if (fifo_empty || !ctl_play) begin
+					ctl_stop <= 1;
+					state <= WAITING_FOR_PLAY_STATE;
 				end
 		endcase
 		
@@ -199,13 +213,13 @@ CEGen sample_clock
 
 wire        playing = ctl_play & ~fifo_empty;
 wire        fifo_full;
-wire  [9:0] fifo_usedw;
+wire [11:0] fifo_usedw;
 wire        fifo_empty;
 reg         fifo_wren;
 wire [15:0] sample_l;
 wire [15:0] sample_r;
 
-msu_fifo #(32,10) audio_fifo
+msu_fifo #(32,12) audio_fifo
 (
 	.aclr(track_processing),
 
