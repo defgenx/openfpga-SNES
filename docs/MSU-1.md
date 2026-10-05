@@ -30,7 +30,7 @@ chip32 loader has been quiet for ~14ms and the core is running:
    `.msu` still enables MSU-1.
 4. The opened size is read from the data slot table (`0x2000`), which APF updates on open.
 5. If the size is non-zero, `0x0180` Data Slot Read copies the file to bridge region `0x4`. The
-   copy is capped at 16MB (`DATA_MAX_SIZE`), and the SNES stays in reset until it finishes.
+   copy is capped at 8MB (`DATA_MAX_SIZE`), and the SNES stays in reset until it finishes.
 
 If any command goes unanswered for ~0.9s during this probe, MSU-1 stays off and the game boots
 normally.
@@ -95,11 +95,11 @@ overflowed while the game read, and Super Road Blaster then executed garbage ("B
 latency to APF's read time: copying after the fact brought back "Timeout while seeking address
 in MSU1 data-file".
 
-A `.msu` file up to 16MB (`DATA_MAX_SIZE`) is copied whole at boot this way, chunk by chunk,
+A `.msu` file up to 8MB (`DATA_MAX_SIZE`) is copied whole at boot this way, chunk by chunk,
 and the game then reads it from SDRAM. A larger one, e.g. Super Road Blaster's video, is
 streamed:
 
-- **Ring and windows:** SDRAM banks 2-3 become a ring, split into two 8MB regions, one per
+- **Ring and windows:** SDRAM banks 2-3 become a ring, split into two 4MB regions, one per
   window. Offsets are 30 bits, so files up to 1GB, as on MiSTer. Windows are tracked in 1KB
   pages, which keeps `msu_apf`'s comparators narrow (it is near the FPGA's size limit); a new
   window starts on the seek's page, and only the file's last read is shorter than a page
@@ -132,11 +132,18 @@ streamed:
   when sequential reads reach `avail_end`, the end of the data copied into the reader's region
   (from each chunk's `copy_base` + `copy_len`), and holds the prefetch meanwhile, so the game
   never reads data that has not arrived.
-- **Audio bursts:** `msu_audio`'s FIFO is 16KB (~93ms). It refills from half full until full
-  (`audio_refill`), so sector requests come back to back, and `msu_apf` holds `.msu` read-ahead
-  for up to ~1.8ms after each sector while the refill lasts: the slot changes about twice per
-  refill instead of around every sector. A track that does not repeat stops once the FIFO has
-  played out (upstream stopped as soon as the last sector was fetched).
+- **Audio ring:** `.pcm` sectors are played from a 1MB ring in SDRAM (1024 sectors, ~6s of
+  audio, SNI word `0x400000` up), never read from APF on request. `msu_apf` keeps the current
+  track's sectors `[aud_start, aud_end)` there, with `[aud_end, aud_fetch)` being read, and
+  answers each `msu_audio` sector request with a replay (`replay_req_toggle`): the store reads
+  the sector from the ring into `msu_audio` in ~0.35ms. A request outside the ring (track
+  start, a loop point or resume already evicted) restarts it there. The track is read ahead
+  in bursts of 8KB reads, from under `AUD_LOW` (176 sectors, ~1s) ahead of the last request up
+  to `AUD_HIGH` (352, ~2s); during a burst `.msu` read-ahead waits unless a seek needs data. So
+  the slot changes about twice a second instead of around every sector, and the 256KB `.msu`
+  read-ahead covers each burst. `msu_audio`'s FIFO is 16KB (~93ms) and refills from half full;
+  a track that does not repeat stops once the FIFO has played out (upstream stopped as soon as
+  the last sector was fetched). Sector numbers are 18 bits: tracks up to 256MB.
 - **Reader position:** `msu_apf` polls it (`pos_req_toggle`) to decide on read-ahead. `MSU.sv`
   moves the address as soon as the game writes a seek, so the store flags positions taken
   during a seek (`pos_seeking`), and they are ignored.
@@ -174,7 +181,8 @@ walk again.
 
 ## Memory
 
-The `.msu` file lives in SDRAM banks 2–3 (16MB), which the controller assigns to port 1/SNI. ROM
+The `.msu` file lives in SDRAM banks 2–3 (an 8MB ring, `RING_BITS` 23, then the 1MB audio
+ring), which the controller assigns to port 1/SNI. ROM
 uses port 0 (banks 0–1). `msu_sdram_store` goes through the controller's SNI port, which only
 starts an access in an idle slot, so it never changes ROM timing. It keeps the current 16-bit
 word and prefetches the next, so DMA-speed reads from `$2001` do not stall.

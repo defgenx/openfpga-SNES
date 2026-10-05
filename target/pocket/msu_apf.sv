@@ -8,13 +8,11 @@ module msu_apf #(
     parameter [15:0] AUDIO_SLOT_ID = 16'd21,
     parameter [3:0] SCRATCH_REGION = 4'h3,
     parameter [31:0] DATA_BRIDGE_ADDR = 32'h4000_0000,
-    // Same bridge region as the data file; bit 27 routes the words to msu_audio
-    parameter [31:0] AUDIO_BRIDGE_ADDR = 32'h4800_0000,
     // SDRAM banks 2-3 hold 2^RING_BITS bytes of the .msu file. A file up to DATA_MAX_SIZE is
     // copied whole at boot; a larger one is streamed through them as a ring (file byte X at
     // X mod 2^RING_BITS), see docs/MSU-1.md "Streaming"
-    parameter RING_BITS = 24,
-    parameter [31:0] DATA_MAX_SIZE = 32'h0100_0000,
+    parameter RING_BITS = 23,
+    parameter [31:0] DATA_MAX_SIZE = 32'h0080_0000,
     // Games time a seek out (Super Road Blaster: "Timeout while seeking"), so a seek completes
     // once STREAM_LEAD bytes past it are in, fetched as one read; chunks stay small so one
     // already in flight delays a seek only briefly
@@ -27,7 +25,7 @@ module msu_apf #(
     // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
     parameter QUIET_BITS = 20,
     // Give up on an unanswered target command during the boot probe: Get/Open File after
-    // 2^29 cycles (~7s), the .msu copy (up to 16MB, several seconds) after 2^30 (~14s)
+    // 2^29 cycles (~7s), the .msu copy (up to 8MB, several seconds) after 2^30 (~14s)
     parameter TIMEOUT_BITS = 30
 ) (
     input wire clk_74a,
@@ -77,8 +75,6 @@ module msu_apf #(
     // Audio sector read: 1024 bytes at sector * 1024
     input wire sector_req_toggle,
     input wire [21:0] sector_num,
-    // msu_audio is refilling its FIFO: more sector requests follow (clk_sys level)
-    input wire audio_refill,
 
     // Streaming (.msu larger than DATA_MAX_SIZE): seek request toggle + offset in, response
     // once STREAM_LEAD bytes past it are in SDRAM; the reader's position on request
@@ -91,12 +87,19 @@ module msu_apf #(
     // (with copy_base/copy_len, latched by the store), fill done after it, and copy done once
     // the chunk is in SDRAM; a bank is reused only after its copy is done
     output reg [1:0] copy_req_toggle = 0,
+    output reg copy_audio = 0,  // the chunk is .pcm data for the audio ring
     output wire copy_region,  // streaming: SDRAM region of the window the chunk belongs to
     output wire seek_region,  // streaming: SDRAM region the reader is in after a seek
     output wire [31:0] copy_base,  // the chunk's read_offset/read_length, stable for the read
     output wire [13:0] copy_len,
     output reg [1:0] fill_done_toggle = 0,
     input wire [1:0] copy_done_toggle,
+    // Audio sectors are played from the SDRAM audio ring (msu_sdram_store replays them);
+    // the payload is stable until the done toggle
+    output reg replay_req_toggle = 0,
+    output wire [9:0] replay_slot,
+    output wire [10:0] replay_len,
+    input wire replay_done_toggle,
     input wire data_seek_req_toggle,
     input wire [31:0] data_seek_addr,
     output reg data_seek_resp_toggle = 0,
@@ -132,6 +135,9 @@ module msu_apf #(
   localparam S_FETCH_CHECK = 25;
   localparam S_FETCH_GO = 26;
   localparam S_SETTLE = 27;
+  localparam S_AUD_ISSUE = 28;
+  localparam S_REPLAY = 29;
+  localparam S_REPLAY_WAIT = 30;
 
   reg [4:0] state = S_IDLE;
   reg [4:0] cmd_return;
@@ -189,7 +195,7 @@ module msu_apf #(
   reg [2:0] pos_ack_s = 0;
   reg [2:0] copy_done0_s = 0;
   reg [2:0] copy_done1_s = 0;
-  reg [2:0] audio_refill_s = 0;
+  reg [2:0] replay_done_s = 0;
   reg track_req_seen = 0;
   reg sector_req_seen = 0;
   reg data_seek_seen = 0;
@@ -201,7 +207,7 @@ module msu_apf #(
     pos_ack_s <= {pos_ack_s[1:0], pos_ack_toggle};
     copy_done0_s <= {copy_done0_s[1:0], copy_done_toggle[0]};
     copy_done1_s <= {copy_done1_s[1:0], copy_done_toggle[1]};
-    audio_refill_s <= {audio_refill_s[1:0], audio_refill};
+    replay_done_s <= {replay_done_s[1:0], replay_done_toggle};
     endian_s <= {endian_s[1:0], bridge_endian_little};
   end
 
@@ -214,9 +220,10 @@ module msu_apf #(
 
   localparam OP_PROBE = 0;
   localparam OP_TRACK = 1;
-  localparam OP_SECTOR = 2;
-  localparam OP_DATA = 3;  // streaming chunk
-  reg [1:0] op = OP_PROBE;
+  localparam OP_SECTOR = 2;  // replay of a .pcm sector from the audio ring
+  localparam OP_DATA = 3;  // .msu chunk
+  localparam OP_AUDIO = 4;  // .pcm chunk into the audio ring
+  reg [2:0] op = OP_PROBE;
 
   localparam CMD_READ = 0;
   localparam CMD_GETFILE = 1;
@@ -295,6 +302,23 @@ module msu_apf #(
 
   wire [15:0] opened_slot = op == OP_PROBE || op == OP_DATA ? DATA_SLOT_ID : AUDIO_SLOT_ID;
 
+  // Audio ring: SDRAM holds .pcm sectors [aud_start, aud_end) of the current track at slot
+  // sector mod 1024, with [aud_end, aud_fetch) being read and copied. APF caches file fragments
+  // for the last-accessed slot only, and finding a position in a large .msu again after a .pcm
+  // read costs tens of ms, so the track is read ahead in bursts: from under AUD_LOW sectors
+  // ahead of msu_audio's request up to AUD_HIGH, 8KB per read; .msu work waits meanwhile
+  // unless a seek needs data. See docs/MSU-1.md "Audio ring".
+  // Sector numbers are AW bits: tracks up to 256MB (~25 minutes)
+  localparam AW = 18;
+  localparam [AW-1:0] AUD_LOW = 176;  // ~1s of 44.1kHz stereo
+  localparam [AW-1:0] AUD_HIGH = 352;
+  localparam [AW-1:0] AUD_KEEP = 1016;  // ring slots in use at most
+  reg [AW-1:0] aud_start = 0, aud_end = 0, aud_fetch = 0;
+  reg aud_bursting = 0;
+  reg [1:0] pend_audio = 0;  // per bank: the chunk is audio
+  assign replay_slot = sector_num[9:0];
+  assign replay_len = sector_length;
+
   localparam [31:0] RING_SIZE = 32'd1 << RING_BITS;
   localparam [31:0] RING_MASK = RING_SIZE - 1'd1;
 
@@ -363,8 +387,24 @@ module msu_apf #(
   // APF caches file fragments for the last-accessed slot only, and re-finding a position in a
   // large .msu after a .pcm read costs tens of ms. During an audio refill burst, .msu reads
   // wait for the next sector request, up to 2^17 cycles (~1.8ms) after the last sector
-  reg [16:0] audio_hold = 0;
-  wire audio_burst = audio_refill_s[2] && audio_hold != 0;
+  wire [AW-1:0] aud_sector = sector_num[AW-1:0];
+  wire [AW-1:0] aud_last = track_size[AW+9:10] + (|track_size[9:0]);  // sectors in the track
+  wire [AW-1:0] aud_left = aud_last - aud_fetch;
+  wire aud_last_chunk = aud_left <= 8;
+  // aud_near: in the window or in the next chunk to read (from aud_fetch)
+  reg aud_hit = 0, aud_near = 0, aud_more = 0, aud_low = 0, aud_high = 0, aud_full = 0;
+  reg [3:0] aud_chunk_pages = 0;
+  reg [13:0] aud_chunk_length = 0;
+  always @(posedge clk_74a) begin
+    aud_hit <= aud_sector >= aud_start && aud_sector < aud_end;
+    aud_near <= aud_sector >= aud_start && aud_sector <= aud_fetch;
+    aud_more <= aud_fetch < aud_last;
+    aud_low <= aud_fetch - aud_sector < AUD_LOW;
+    aud_high <= aud_fetch - aud_sector >= AUD_HIGH;
+    aud_full <= aud_fetch + 8 - aud_start > AUD_KEEP;
+    aud_chunk_pages <= aud_last_chunk ? aud_left[3:0] : 4'd8;
+    aud_chunk_length <= aud_last_chunk ? track_size[13:0] - {aud_fetch[3:0], 10'b0} : 14'h2000;
+  end
   always @(posedge clk_74a) begin
     prev_state <= state;
     stream_base <= stream_base_c;
@@ -389,8 +429,7 @@ module msu_apf #(
   assign target_dataslot_id = cmd == CMD_GETFILE ? 16'd0 : opened_slot;
   assign target_dataslot_slotoffset = read_offset;
   // .msu chunks land in bounce buffer bank cur_bank (8KB apart)
-  assign target_dataslot_bridgeaddr = op == OP_SECTOR ? AUDIO_BRIDGE_ADDR
-      : DATA_BRIDGE_ADDR + {cur_bank, 13'b0};
+  assign target_dataslot_bridgeaddr = DATA_BRIDGE_ADDR + {cur_bank, 13'b0};
   assign target_dataslot_length = read_length;
   wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], struct_little)+:8];
   // Full sectors, then the remainder, then nothing past the end
@@ -425,14 +464,16 @@ module msu_apf #(
       probe_status <= 0;
     end
 
-    if (audio_hold != 0) audio_hold <= audio_hold - 1'd1;
+    if (aud_low && aud_more) aud_bursting <= 1;
+    else if (aud_high || !aud_more) aud_bursting <= 0;
 
     if (ioctl_download) quiet <= 0;
     else if (~&quiet) quiet <= quiet + 1'd1;
 
     // A chunk reached SDRAM. The other win_end writers below require !any_outstanding
     if (copy_outstanding[done_bank] && done_bank_copied) begin
-      win_end <= win_end + (done_bank ? pend_pages1 : pend_pages0);
+      if (pend_audio[done_bank]) aud_end <= aud_end + (done_bank ? pend_pages1 : pend_pages0);
+      else win_end <= win_end + (done_bank ? pend_pages1 : pend_pages0);
       copy_outstanding[done_bank] <= 0;
       done_bank <= ~done_bank;
     end
@@ -447,7 +488,7 @@ module msu_apf #(
           cmd <= CMD_GETFILE;
           cmd_return <= S_GETFILE_DONE;
           state <= S_CMD;
-        end else if (msu_enable && track_pending) begin
+        end else if (msu_enable && track_pending && !any_outstanding) begin
           track_req_seen <= track_req_s[2];
           op <= OP_TRACK;
           digit_value <= track_num;
@@ -455,14 +496,19 @@ module msu_apf #(
           digit <= 0;
           ndigits <= 0;
           state <= S_DIGITS;
-        end else if (msu_enable && sector_pending) begin
+        end else if (msu_enable && sector_pending && aud_hit) begin
+          // In the audio ring: replay it, no SD access
           sector_req_seen <= sector_req_s[2];
           op <= OP_SECTOR;
-          read_page <= sector_num;
-          read_length <= sector_length;
           audio_download <= 1;
           drain <= 0;
-          state <= S_READ;
+          state <= S_REPLAY;
+        end else if (msu_enable && sector_pending && !aud_near && !any_outstanding) begin
+          // Outside the ring (track start, a loop point or resume beyond it): restart there
+          aud_start <= aud_sector;
+          aud_end <= aud_sector;
+          aud_fetch <= aud_sector;
+          state <= S_SETTLE;
         end else if (stream_mode && data_seek_pending && !(seek_restart && any_outstanding)) begin
           // Inside the active window: keep it. Inside the parked one: swap them. Elsewhere:
           // park the active window and start a new one at the seek, in the other region.
@@ -489,10 +535,16 @@ module msu_apf #(
           seek_waiting <= 0;
           data_seek_resp_toggle <= data_seek_seen;
           state <= S_SETTLE;
-        end else if (stream_mode && bank_free && more_to_fetch && !audio_burst) begin
+        end else if (msu_enable && sector_pending && aud_near && aud_more && bank_free) begin
+          // msu_audio is waiting for a sector being read: keep reading the track
+          state <= S_AUD_ISSUE;
+        end else if (stream_mode && bank_free && more_to_fetch
+            && (seek_waiting || !(aud_bursting && aud_more))) begin
           // Ask where the reader is, then decide whether to fetch the next chunk
           pos_req_toggle <= ~pos_req_toggle;
           state <= S_POS_WAIT;
+        end else if (msu_enable && aud_bursting && aud_more && bank_free) begin
+          state <= S_AUD_ISSUE;
         end else if (!msu_enable) begin
           // Requests while MSU is off are dropped, like hps_ext
           track_req_seen <= track_req_s[2];
@@ -502,6 +554,36 @@ module msu_apf #(
       end
 
       S_SETTLE: state <= S_IDLE;
+
+      // Read the next .pcm chunk at aud_fetch into bank cur_bank, for the audio ring
+      S_AUD_ISSUE: begin
+        op <= OP_AUDIO;
+        read_page <= 22'(aud_fetch);
+        read_length <= aud_chunk_length;
+        copy_audio <= 1;
+        copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
+        copy_outstanding[cur_bank] <= 1;
+        pend_audio[cur_bank] <= 1;
+        if (cur_bank) pend_pages1 <= aud_chunk_pages;
+        else pend_pages0 <= aud_chunk_pages;
+        if (aud_full) aud_start <= aud_fetch + 8 - AUD_KEEP;
+        drain <= 0;
+        state <= S_READ;
+      end
+
+      // Replay a sector from the audio ring; audio_download is up first, as for a read
+      S_REPLAY: begin
+        drain <= drain + 1'd1;
+        if (drain == 10'd31) begin
+          replay_req_toggle <= ~replay_req_toggle;
+          state <= S_REPLAY_WAIT;
+        end
+      end
+
+      S_REPLAY_WAIT: if (replay_done_s[2] == replay_req_toggle) begin
+        drain <= 0;
+        state <= S_DRAIN;
+      end
 
       S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH_CHECK;
 
@@ -525,8 +607,10 @@ module msu_apf #(
           op <= OP_DATA;
           read_page <= fetch_end;
           read_length <= chunk_length;
+          copy_audio <= 0;
           copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
           copy_outstanding[cur_bank] <= 1;
+          pend_audio[cur_bank] <= 0;
           if (cur_bank) pend_pages1 <= chunk_pages;
           else pend_pages0 <= chunk_pages;
           drain <= 0;
@@ -714,6 +798,10 @@ module msu_apf #(
         end else begin
           track_size <= cmd_ok ? slot_size : 32'd0;
           track_resp_toggle <= ~track_resp_toggle;
+          // A new track: nothing of it is in the audio ring yet (no chunk is outstanding)
+          aud_start <= 0;
+          aud_end <= 0;
+          aud_fetch <= 0;
           state <= S_IDLE;
         end
       end
@@ -747,8 +835,10 @@ module msu_apf #(
           op <= OP_DATA;
           read_page <= fetch_end;
           read_length <= chunk_length;
+          copy_audio <= 0;
           copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
           copy_outstanding[cur_bank] <= 1;
+          pend_audio[cur_bank] <= 0;
           if (cur_bank) pend_pages1 <= chunk_pages;
           else pend_pages0 <= chunk_pages;
           drain <= 0;
@@ -767,16 +857,14 @@ module msu_apf #(
             msu_data_download <= 0;
             msu_busy <= 0;
             state <= S_IDLE;
-          end else if (op == OP_DATA) begin
+          end else if (op == OP_DATA || op == OP_AUDIO) begin
             // The bank is filled; its copy finishes on its own, so move to the other bank
             fill_done_toggle[cur_bank] <= ~fill_done_toggle[cur_bank];
-            fetch_end <= fetch_end + (cur_bank ? pend_pages1 : pend_pages0);
+            if (op == OP_DATA) fetch_end <= fetch_end + (cur_bank ? pend_pages1 : pend_pages0);
+            else aud_fetch <= aud_fetch + (cur_bank ? pend_pages1 : pend_pages0);
             cur_bank <= ~cur_bank;
             state <= preloading ? S_PRELOAD : S_IDLE;
-          end else begin
-            if (op == OP_SECTOR) audio_hold <= {17{1'b1}};
-            state <= S_IDLE;
-          end
+          end else state <= S_IDLE;
         end
       end
 

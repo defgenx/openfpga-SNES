@@ -177,7 +177,6 @@ module MAIN_SNES (
     output wire [31:0] msu_pos_value,
     output wire msu_pos_seeking,
     output wire [1:0] msu_seek_slowest,  // debug overlay, see msu_sdram_store
-    output wire msu_audio_refill,  // msu_audio wants a burst of sectors, see msu_apf
 
     // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
     input wire [1:0] msu_copy_req_toggle,
@@ -186,7 +185,13 @@ module MAIN_SNES (
     input wire [31:0] msu_copy_base,
     input wire [13:0] msu_copy_len,
     input wire [1:0] msu_fill_done_toggle,
-    output wire [1:0] msu_copy_done_toggle
+    output wire [1:0] msu_copy_done_toggle,
+    // .pcm chunks for the SDRAM audio ring, and sector replays from it (msu_apf)
+    input wire msu_copy_audio,
+    input wire msu_replay_req_toggle,
+    input wire [9:0] msu_replay_slot,
+    input wire [10:0] msu_replay_len,
+    output wire msu_replay_done_toggle
 );
   parameter USE_CX4 = 1'b0;
   parameter USE_SDD1 = 1'b0;
@@ -357,6 +362,10 @@ module MAIN_SNES (
   wire [7:0] R;
   wire [7:0] G;
   wire [7:0] B;
+
+  // Audio ring replay into msu_audio (msu_sdram_store)
+  wire msu_replay_wr;
+  wire [15:0] msu_replay_data;
 
   // Freezes the console while a slow MSU-1 streaming seek completes
   wire msu_stall;
@@ -1176,8 +1185,8 @@ module MAIN_SNES (
           .track_processing(msu_track_request),
 
           .audio_download(msu_audio_download_s),
-          .audio_data(msu_audio_wr_data),
-          .audio_data_wr(msu_audio_wr),
+          .audio_data(msu_replay_wr ? msu_replay_data : msu_audio_wr_data),
+          .audio_data_wr(msu_audio_wr | msu_replay_wr),
 
           .audio_ack(msu_audio_ack),
           .audio_sector(msu_audio_sector),
@@ -1187,7 +1196,7 @@ module MAIN_SNES (
           .audio_loop_index(msu_audio_loop_index),
           .resume_loop_index(msu_resume_loop_index),
 
-          .audio_refill(msu_audio_refill),
+          .audio_refill(),
           .audio_l(msu_l),
           .audio_r(msu_r)
       );
@@ -1217,6 +1226,13 @@ module MAIN_SNES (
           .copy_len(msu_copy_len),
           .fill_done_toggle(msu_fill_done_toggle),
           .copy_done_toggle(msu_copy_done_toggle),
+          .copy_audio(msu_copy_audio),
+          .replay_req_toggle(msu_replay_req_toggle),
+          .replay_slot(msu_replay_slot),
+          .replay_len(msu_replay_len),
+          .replay_done_toggle(msu_replay_done_toggle),
+          .replay_wr(msu_replay_wr),
+          .replay_data(msu_replay_data),
 
           .rd_addr(msu_data_addr),
           .rd_seek(msu_data_seek),
@@ -1234,7 +1250,6 @@ module MAIN_SNES (
       assign msu_track_mounting = 0;
       assign msu_track_missing = 0;
       assign msu_stall = 0;
-      assign msu_audio_refill = 0;
       assign msu_seek_slowest = 0;
       assign msu_audio_size = 0;
       assign msu_audio_ack = 0;
@@ -1261,6 +1276,7 @@ module MAIN_SNES (
       assign msu_pos_value = 0;
       assign msu_pos_seeking = 0;
       assign msu_copy_done_toggle = 0;
+      assign msu_replay_done_toggle = 0;
     end
   endgenerate
 

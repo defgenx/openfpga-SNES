@@ -682,7 +682,11 @@ module core_top (
 
   wire msu_stream_mode;
   wire [1:0] msu_seek_slowest;
-  wire msu_audio_refill;
+  wire msu_copy_audio;
+  wire msu_replay_req_toggle;
+  wire [9:0] msu_replay_slot;
+  wire [10:0] msu_replay_len;
+  wire msu_replay_done_toggle;
   wire msu_stream_underrun;
   wire [5:0] msu_stream_fill;
   wire msu_data_seek_req_toggle;
@@ -740,7 +744,6 @@ module core_top (
 
       .sector_req_toggle(msu_sector_req_toggle),
       .sector_num(msu_sector_req_num),
-      .audio_refill(msu_audio_refill),
 
       .stream_mode(msu_stream_mode),
       .stream_underrun(msu_stream_underrun),
@@ -759,7 +762,12 @@ module core_top (
       .copy_base(msu_copy_base),
       .copy_len(msu_copy_len),
       .fill_done_toggle(msu_fill_done_toggle),
-      .copy_done_toggle(msu_copy_done_toggle)
+      .copy_done_toggle(msu_copy_done_toggle),
+      .copy_audio(msu_copy_audio),
+      .replay_req_toggle(msu_replay_req_toggle),
+      .replay_slot(msu_replay_slot),
+      .replay_len(msu_replay_len),
+      .replay_done_toggle(msu_replay_done_toggle)
   );
 
   // Region 0x4 words: 0x4000_0000 + offset is .msu data, 0x4800_0000 a .pcm sector
@@ -1109,7 +1117,6 @@ module core_top (
       .msu_pos_value(msu_pos_value),
       .msu_pos_seeking(msu_pos_seeking),
       .msu_seek_slowest(msu_seek_slowest),
-      .msu_audio_refill(msu_audio_refill),
 
       .msu_copy_req_toggle(msu_copy_req_toggle),
       .msu_copy_region(msu_copy_region),
@@ -1117,7 +1124,12 @@ module core_top (
       .msu_copy_base(msu_copy_base),
       .msu_copy_len(msu_copy_len),
       .msu_fill_done_toggle(msu_fill_done_toggle),
-      .msu_copy_done_toggle(msu_copy_done_toggle)
+      .msu_copy_done_toggle(msu_copy_done_toggle),
+      .msu_copy_audio(msu_copy_audio),
+      .msu_replay_req_toggle(msu_replay_req_toggle),
+      .msu_replay_slot(msu_replay_slot),
+      .msu_replay_len(msu_replay_len),
+      .msu_replay_done_toggle(msu_replay_done_toggle)
   );
 
   // Video

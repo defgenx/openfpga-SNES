@@ -94,14 +94,14 @@ module msu_host (
   end
 endmodule
 
-// The .msu data file in SDRAM banks 2-3 (16MB), reached through the controller's SNI
+// The .msu data file in SDRAM banks 2-3 (8MB ring, then the 1MB audio ring), reached through the controller's SNI
 // port, which waits for idle slots and so never disturbs ROM timing on port 0.
 // Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface. msu_apf reads the
 // file a chunk at a time into one of two block RAM bounce buffer banks; this copies each word
 // into SDRAM as soon as it lands, between the game's reads. While streaming, the SDRAM banks
 // are a ring around the reader. See docs/MSU-1.md.
 module msu_sdram_store #(
-    parameter RING_BITS = 24,
+    parameter RING_BITS = 23,  // .msu ring; the 1MB audio ring sits above it (AUD_WORD_BASE)
     parameter CHUNK_WORD_BITS = 11  // two bounce buffer banks of 2^n 32-bit words (8KB each)
 ) (
     input wire clk_sys,
@@ -130,11 +130,21 @@ module msu_sdram_store #(
     // once it has all arrived, and copy done once it is all in SDRAM
     input wire [1:0] copy_req_toggle,
     input wire copy_region,  // streaming: ring region the requested chunk goes to
+    input wire copy_audio,  // the chunk is .pcm data for the audio ring (copy_base: byte in file)
     input wire seek_region,  // streaming: ring region of the reader, valid with the seek response
     input wire [31:0] copy_base,
     input wire [CHUNK_WORD_BITS+2:0] copy_len,
     input wire [1:0] fill_done_toggle,
     output reg [1:0] copy_done_toggle = 0,
+
+    // Audio ring replay: one .pcm sector (replay_len bytes from ring slot replay_slot) as
+    // msu_audio's 16-bit writes; the request payload is stable until the done toggle
+    input wire replay_req_toggle,
+    input wire [9:0] replay_slot,
+    input wire [10:0] replay_len,
+    output reg replay_done_toggle = 0,
+    output reg replay_wr = 0,
+    output reg [15:0] replay_data = 0,
 
     // MSU.sv data port
     input wire [31:0] rd_addr,
@@ -158,6 +168,9 @@ module msu_sdram_store #(
     wrap_in = stream_mode ? (w & REGION_WORD_MASK) | ({22'd0, region} << (RING_BITS - 2))
         : w & WORD_MASK;
   endfunction
+  // Audio ring: 1MB (1024 .pcm sectors) at SNI word 0x400000, above the .msu ring
+  localparam [22:0] AUD_WORD_BASE = 23'h400000;
+  localparam [22:0] AUD_WORD_MASK = 23'h07FFFF;
   reg read_region = 0;
   function automatic [22:0] wrap(input [22:0] w);
     wrap = wrap_in(read_region, w);
@@ -187,7 +200,9 @@ module msu_sdram_store #(
   reg [29:0] avail_end0 = 0, avail_end1 = 0;
   wire [29:0] avail_end = read_region ? avail_end1 : avail_end0;
   reg region0 = 0, region1 = 0;
+  reg audio0 = 0, audio1 = 0;
   reg copy_cur_region = 0;
+  reg copy_cur_audio = 0;
   reg [CHUNK_WORD_BITS+2:0] len0 = 0, len1 = 0;
   reg [CHUNK_WORD_BITS:0] arrived0 = 0, arrived1 = 0;
   // Delayed a cycle: a word counted here is readable through cbuf_q
@@ -271,7 +286,15 @@ module msu_sdram_store #(
   // What the in-flight read fills
   localparam DST_CUR = 0;
   localparam DST_NEXT = 1;
-  reg dst = DST_CUR;
+  localparam DST_REPLAY = 2;
+  reg [1:0] dst = DST_CUR;
+
+  // Audio replay engine
+  reg [2:0] replay_req_s = 0;
+  reg replaying = 0;
+  reg [8:0] rp_idx = 0;  // 16-bit word within the sector
+  reg [9:0] rp_left = 0;  // 16-bit words still to read
+  wire [22:0] replay_sni_word = AUD_WORD_BASE | ({replay_slot, rp_idx} & AUD_WORD_MASK);
   reg old_seek = 0;
 
   // The reader crossed into the prefetched word: shift it in and fetch the one after
@@ -279,9 +302,21 @@ module msu_sdram_store #(
       && rd_word == wrap(cur_word + 1'd1) && !starving;
   wire copy_go = st == ST_IDLE && copying && copy_q_ok && copy_word_ready && !prefetch_go;
   // SNI word of the buffered word being copied (copy_cur_base is 4-byte aligned)
-  wire [22:0] copy_sni_word = wrap_in(copy_cur_region, copy_cur_base[23:1] + {copy_idx, 1'b0} + copy_half);
+  wire [22:0] copy_msu_word = copy_cur_base[23:1] + {copy_idx, 1'b0} + copy_half;
+  wire [22:0] copy_sni_word = copy_cur_audio ? AUD_WORD_BASE | (copy_msu_word & AUD_WORD_MASK)
+      : wrap_in(copy_cur_region, copy_msu_word);
 
   always @(posedge clk_sys) begin
+    replay_wr <= 0;
+    replay_req_s <= {replay_req_s[1:0], replay_req_toggle};
+    if (!replaying && replay_req_s[2] != replay_done_toggle) begin
+      replaying <= 1;
+      rp_idx <= 0;
+      rp_left <= 10'((12'(replay_len) + 1'd1) >> 1);
+    end else if (replaying && rp_left == 0 && st == ST_IDLE) begin
+      replaying <= 0;
+      replay_done_toggle <= replay_req_s[2];
+    end
     req0_s <= {req0_s[1:0], copy_req_toggle[0]};
     req1_s <= {req1_s[1:0], copy_req_toggle[1]};
     fill0_s <= {fill0_s[1:0], fill_done_toggle[0]};
@@ -298,6 +333,7 @@ module msu_sdram_store #(
       base0 <= copy_base[23:0];
       fbase0 <= copy_base[29:0];
       region0 <= copy_region;
+      audio0 <= copy_audio;
       len0 <= copy_len;
       arrived0 <= 0;
       filled[0] <= 0;
@@ -308,6 +344,7 @@ module msu_sdram_store #(
       base1 <= copy_base[23:0];
       fbase1 <= copy_base[29:0];
       region1 <= copy_region;
+      audio1 <= copy_audio;
       len1 <= copy_len;
       arrived1 <= 0;
       filled[1] <= 0;
@@ -335,11 +372,13 @@ module msu_sdram_store #(
       copy_cur_base <= eng_bank ? base1 : base0;
       copy_cur_fbase <= eng_bank ? fbase1 : fbase0;
       copy_cur_region <= eng_bank ? region1 : region0;
+      copy_cur_audio <= eng_bank ? audio1 : audio0;
       copy_left <= ((eng_bank ? len1 : len0) + 2'd3) >> 2;
       copy_q_ok <= 0;
     end else if (copying && copy_left == 0) begin
       copying <= 0;
-      if (copy_cur_region) avail_end1 <= copy_cur_fbase + (eng_bank ? len1 : len0);
+      if (copy_cur_audio) ;
+      else if (copy_cur_region) avail_end1 <= copy_cur_fbase + (eng_bank ? len1 : len0);
       else avail_end0 <= copy_cur_fbase + (eng_bank ? len1 : len0);
       pending[eng_bank] <= 0;
       copy_done_toggle[eng_bank] <= req_seen[eng_bank];
@@ -401,6 +440,13 @@ module msu_sdram_store #(
           dst <= DST_CUR;
           wait_cnt <= 0;
           st <= ST_WAIT;
+        end else if (replaying && rp_left != 0) begin
+          // Audio ring to msu_audio: ~0.35ms a sector, well ahead of its FIFO
+          sni_addr <= {1'b1, replay_sni_word, 1'b0};
+          sni_rd_req <= 1;
+          dst <= DST_REPLAY;
+          wait_cnt <= 0;
+          st <= ST_WAIT;
         end
       end
 
@@ -411,7 +457,12 @@ module msu_sdram_store #(
         else if (sni_ready) begin
           last_was_read <= sni_rd_req;
           if (sni_rd_req) begin
-            if (dst == DST_CUR) cur_q <= sni_dout;
+            if (dst == DST_REPLAY) begin
+              replay_wr <= 1;
+              replay_data <= sni_dout;
+              rp_idx <= rp_idx + 1'd1;
+              rp_left <= rp_left - 1'd1;
+            end else if (dst == DST_CUR) cur_q <= sni_dout;
             else begin
               next_q <= sni_dout;
               next_valid <= 1;

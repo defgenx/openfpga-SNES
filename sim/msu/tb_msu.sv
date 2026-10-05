@@ -204,6 +204,12 @@ module tb_msu;
   wire [31:0] seek_addr, pos_value;
   wire pos_seeking;
 
+  // Audio ring: msu_apf -> store
+  wire copy_audio, replay_req_t, replay_done_t, replay_wr;
+  wire [9:0] replay_slot;
+  wire [10:0] replay_len;
+  wire [15:0] replay_data;
+
   msu_apf #(
       .QUIET_BITS(8),
       .TIMEOUT_BITS(26),
@@ -246,7 +252,6 @@ module tb_msu;
       .track_size(track_size),
       .sector_req_toggle(sector_req_toggle),
       .sector_num(sector_num),
-      .audio_refill(audio_refill),
       .stream_mode(stream_mode),
       .stream_underrun(stream_underrun),
       .data_seek_req_toggle(seek_req_t),
@@ -257,6 +262,11 @@ module tb_msu;
       .pos_value(pos_value),
       .pos_seeking(pos_seeking),
       .copy_req_toggle(copy_req_t),
+      .copy_audio(copy_audio),
+      .replay_req_toggle(replay_req_t),
+      .replay_slot(replay_slot),
+      .replay_len(replay_len),
+      .replay_done_toggle(replay_done_t),
       .copy_region(copy_region),
       .seek_region(seek_region),
       .copy_base(copy_base),
@@ -390,8 +400,8 @@ module tb_msu;
       .track_size(m_audio_size),
       .track_processing(m_track_request),
       .audio_download(audio_download_s),
-      .audio_data(audio_data),
-      .audio_data_wr(audio_wr),
+      .audio_data(replay_wr ? replay_data : audio_data),
+      .audio_data_wr(audio_wr | replay_wr),
       .audio_ack(m_audio_ack),
       .audio_sector(m_sector),
       .audio_req(m_audio_req),
@@ -435,6 +445,13 @@ module tb_msu;
       .load_data(rx_data),
       .copy_req_toggle(copy_req_t),
       .copy_region(copy_region),
+      .copy_audio(copy_audio),
+      .replay_req_toggle(replay_req_t),
+      .replay_slot(replay_slot),
+      .replay_len(replay_len),
+      .replay_done_toggle(replay_done_t),
+      .replay_wr(replay_wr),
+      .replay_data(replay_data),
       .seek_region(seek_region),
       .copy_base(copy_base),
       .copy_len(copy_len),
@@ -456,6 +473,7 @@ module tb_msu;
   // SNI model in clk_mem: ready drops on a request edge, rises after a random delay
 
   reg [15:0] sdram[0:65535];
+  reg [15:0] aud_ram[0:524287];  // the 1MB audio ring at SNI word 0x400000
   reg old_wr = 0, old_rd = 0;
   integer sni_delay = 0;
   reg sni_is_wr = 0;
@@ -466,7 +484,7 @@ module tb_msu;
     old_wr <= sni_wr_req;
     old_rd <= sni_rd_req;
     if ((sni_wr_req && !old_wr) || (sni_rd_req && !old_rd)) begin
-      if (!sni_addr[24] || sni_addr[23:17] != 0) begin
+      if (!sni_addr[24] || (sni_addr[23] ? sni_addr[22:20] != 0 : sni_addr[22:17] != 0)) begin
         $display("FAIL: SNI address %h outside test window", sni_addr);
         $finish;
       end
@@ -480,7 +498,10 @@ module tb_msu;
     end else if (sni_delay > 0) begin
       sni_delay <= sni_delay - 1;
       if (sni_delay == 1) begin
-        if (sni_is_wr) sdram[sni_lat_addr[16:1]] <= sni_lat_din;
+        if (sni_lat_addr[23]) begin
+          if (sni_is_wr) aud_ram[sni_lat_addr[19:1]] <= sni_lat_din;
+          else sni_dout <= aud_ram[sni_lat_addr[19:1]];
+        end else if (sni_is_wr) sdram[sni_lat_addr[16:1]] <= sni_lat_din;
         else sni_dout <= sdram[sni_lat_addr[16:1]];
         sni_ready <= 1;
       end
