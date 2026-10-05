@@ -201,43 +201,33 @@ module tb_msu;
       .sector_num(sector_num)
   );
 
-  wire load_wr, audio_wr;
-  wire [23:0] load_addr;
-  wire [15:0] load_data, audio_data;
+  wire loader_wr;
+  wire [27:0] loader_addr;
+  wire [15:0] loader_data;
 
   data_loader #(
       .ADDRESS_MASK_UPPER_4(4'h4),
-      .ADDRESS_SIZE(24),
+      .ADDRESS_SIZE(28),
       .WRITE_MEM_CLOCK_DELAY(7),
       .OUTPUT_WORD_SIZE(2)
-  ) msu_data_loader (
+  ) msu_loader (
       .clk_74a(clk_74a),
       .clk_memory(clk_sys),
       .bridge_wr(bridge_wr),
       .bridge_endian_little(LITTLE[0]),
       .bridge_addr(bridge_addr),
       .bridge_wr_data(bridge_wr_data),
-      .write_en(load_wr),
-      .write_addr(load_addr),
-      .write_data(load_data)
+      .write_en(loader_wr),
+      .write_addr(loader_addr),
+      .write_data(loader_data)
   );
 
-  data_loader #(
-      .ADDRESS_MASK_UPPER_4(4'h5),
-      .ADDRESS_SIZE(11),
-      .WRITE_MEM_CLOCK_DELAY(7),
-      .OUTPUT_WORD_SIZE(2)
-  ) msu_audio_loader (
-      .clk_74a(clk_74a),
-      .clk_memory(clk_sys),
-      .bridge_wr(bridge_wr),
-      .bridge_endian_little(LITTLE[0]),
-      .bridge_addr(bridge_addr),
-      .bridge_wr_data(bridge_wr_data),
-      .write_en(audio_wr),
-      .write_addr(),
-      .write_data(audio_data)
-  );
+  // Same split as core_top.sv
+  wire load_wr = loader_wr & ~loader_addr[27];
+  wire [23:0] load_addr = loader_addr[23:0];
+  wire [15:0] load_data = loader_data;
+  wire audio_wr = loader_wr & loader_addr[27];
+  wire [15:0] audio_data = loader_data;
 
   ////////////////////////////////////////////////////////////////////////////
   // DUT, clk_sys side

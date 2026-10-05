@@ -643,7 +643,7 @@ module core_top (
   end
 
   ////////////////////////////  MSU-1  ////////////////////////////////////
-  // See docs/MSU-1.md. Bridge regions: 0x3 filename structs, 0x4 .msu data, 0x5 .pcm sectors
+  // See docs/MSU-1.md. Bridge regions: 0x3 filename structs, 0x4 .msu data and .pcm sectors
 
   wire target_dataslot_done;
   wire [2:0] target_dataslot_err;
@@ -712,16 +712,17 @@ module core_top (
       .sector_num(msu_sector_req_num)
   );
 
-  wire msu_data_wr;
-  wire [23:0] msu_data_wr_addr;
-  wire [15:0] msu_data_wr_data;
+  // One loader for both streams: 0x4000_0000 + offset is .msu data, 0x4800_0000 a .pcm sector
+  wire msu_loader_wr;
+  wire [27:0] msu_loader_addr;
+  wire [15:0] msu_loader_data;
 
   data_loader #(
       .ADDRESS_MASK_UPPER_4(4'h4),
-      .ADDRESS_SIZE(24),
+      .ADDRESS_SIZE(28),
       .WRITE_MEM_CLOCK_DELAY(7),
       .OUTPUT_WORD_SIZE(2)
-  ) msu_data_loader (
+  ) msu_loader (
       .clk_74a(clk_74a),
       .clk_memory(clk_sys_21_48),
 
@@ -730,32 +731,16 @@ module core_top (
       .bridge_addr(bridge_addr),
       .bridge_wr_data(bridge_wr_data),
 
-      .write_en  (msu_data_wr),
-      .write_addr(msu_data_wr_addr),
-      .write_data(msu_data_wr_data)
+      .write_en  (msu_loader_wr),
+      .write_addr(msu_loader_addr),
+      .write_data(msu_loader_data)
   );
 
-  wire msu_audio_wr;
-  wire [15:0] msu_audio_wr_data;
-
-  data_loader #(
-      .ADDRESS_MASK_UPPER_4(4'h5),
-      .ADDRESS_SIZE(11),
-      .WRITE_MEM_CLOCK_DELAY(7),
-      .OUTPUT_WORD_SIZE(2)
-  ) msu_audio_loader (
-      .clk_74a(clk_74a),
-      .clk_memory(clk_sys_21_48),
-
-      .bridge_wr(bridge_wr),
-      .bridge_endian_little(bridge_endian_little),
-      .bridge_addr(bridge_addr),
-      .bridge_wr_data(bridge_wr_data),
-
-      .write_en  (msu_audio_wr),
-      .write_addr(),
-      .write_data(msu_audio_wr_data)
-  );
+  wire msu_data_wr = msu_loader_wr & ~msu_loader_addr[27];
+  wire [23:0] msu_data_wr_addr = msu_loader_addr[23:0];
+  wire [15:0] msu_data_wr_data = msu_loader_data;
+  wire msu_audio_wr = msu_loader_wr & msu_loader_addr[27];
+  wire [15:0] msu_audio_wr_data = msu_loader_data;
 
   wire [15:0] audio_l;
   wire [15:0] audio_r;

@@ -8,7 +8,8 @@ module msu_apf #(
     parameter [15:0] AUDIO_SLOT_ID = 16'd21,
     parameter [3:0] SCRATCH_REGION = 4'h3,
     parameter [31:0] DATA_BRIDGE_ADDR = 32'h4000_0000,
-    parameter [31:0] AUDIO_BRIDGE_ADDR = 32'h5000_0000,
+    // Same data_loader as the data file; bit 27 routes the words to msu_audio
+    parameter [31:0] AUDIO_BRIDGE_ADDR = 32'h4800_0000,
     // Bytes of the .msu file that fit in SDRAM banks 2-3
     parameter [31:0] DATA_MAX_SIZE = 32'h0100_0000,
     // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
@@ -66,7 +67,6 @@ module msu_apf #(
   localparam S_SCAN_WAIT = 2;
   localparam S_SCAN = 3;
   localparam S_DIGITS = 4;
-  localparam S_PCM_EXT = 5;
   localparam S_SUFFIX = 6;
   localparam S_SUFFIX_ADDR = 7;
   localparam S_SUFFIX_WAIT = 8;
@@ -160,14 +160,46 @@ module msu_apf #(
   reg have_dot;
 
   // Written after base_len: ".msu" or "-<n>.pcm", then NUL
-  reg [7:0] suffix[0:10];
-  reg [3:0] suffix_len;
   reg [3:0] suffix_idx;
-
   reg [15:0] digit_value;
   reg [2:0] digit_pos;
   reg [3:0] digit;
-  reg digit_started;
+  reg [19:0] digits;  // emitted decimal digits, most significant in the highest used nibble
+  reg [2:0] ndigits;
+
+  wire [3:0] suffix_len = op == OP_PROBE ? 4'd5 : 4'd6 + ndigits;
+
+  function automatic [7:0] ext_char(input [2:0] i, input probe);
+    case (i)
+      0: ext_char = probe ? "." : "-";
+      default: ext_char = 8'h00;
+    endcase
+    if (probe)
+      case (i)
+        1: ext_char = "m";
+        2: ext_char = "s";
+        3: ext_char = "u";
+        default: ;
+      endcase
+  endfunction
+
+  function automatic [7:0] pcm_char(input [2:0] i);
+    case (i)
+      0: pcm_char = ".";
+      1: pcm_char = "p";
+      2: pcm_char = "c";
+      3: pcm_char = "m";
+      default: pcm_char = 8'h00;
+    endcase
+  endfunction
+
+  wire [3:0] digit_k = suffix_idx - 1'd1;  // digit index, most significant first
+  wire [3:0] digit_at = digits[{ndigits - 1'd1 - digit_k[2:0], 2'b00}+:4];
+  wire [7:0] suffix_char =
+      op == OP_PROBE ? ext_char(suffix_idx[2:0], 1'b1)
+      : suffix_idx == 0 ? "-"
+      : suffix_idx <= ndigits ? "0" + digit_at
+      : pcm_char(suffix_idx - ndigits - 1'd1);
 
   reg [31:0] slot_size;
   reg [1:0] dt_wait;
@@ -179,6 +211,10 @@ module msu_apf #(
   wire [15:0] opened_slot = op == OP_PROBE ? DATA_SLOT_ID : AUDIO_SLOT_ID;
   wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], little)+:8];
   wire [31:0] sector_offset = {sector_num, 10'b0};
+  // Full sectors, then the remainder, then nothing past the end
+  wire [21:0] last_sector = track_size[31:10];
+  wire [10:0] sector_length = sector_num < last_sector ? 11'd1024
+      : sector_num == last_sector ? {1'b0, track_size[9:0]} : 11'd0;
 
   function automatic [15:0] pow10(input [2:0] pos);
     case (pos)
@@ -218,20 +254,16 @@ module msu_apf #(
         end else if (msu_enable && track_pending) begin
           track_req_seen <= track_req_s[2];
           op <= OP_TRACK;
-          suffix[0] <= "-";
-          suffix_len <= 1;
           digit_value <= track_num;
           digit_pos <= 0;
           digit <= 0;
-          digit_started <= 0;
+          ndigits <= 0;
           state <= S_DIGITS;
         end else if (msu_enable && sector_pending) begin
           sector_req_seen <= sector_req_s[2];
           op <= OP_SECTOR;
           read_offset <= sector_offset;
-          if (sector_offset >= track_size) read_length <= 0;
-          else if (track_size - sector_offset < 32'd1024) read_length <= track_size - sector_offset;
-          else read_length <= 32'd1024;
+          read_length <= sector_length;
           audio_download <= 1;
           drain <= 0;
           state <= S_READ;
@@ -259,12 +291,6 @@ module msu_apf #(
       S_SCAN: begin
         if (scan_byte == 8'h00) begin
           base_len <= have_dot ? last_dot : idx;
-          suffix[0] <= ".";
-          suffix[1] <= "m";
-          suffix[2] <= "s";
-          suffix[3] <= "u";
-          suffix[4] <= 8'h00;
-          suffix_len <= 5;
           state <= S_SUFFIX;
         end else if (idx == 8'd255) begin
           // No terminator inside the struct
@@ -288,25 +314,14 @@ module msu_apf #(
           digit_value <= digit_value - pow10(digit_pos);
           digit <= digit + 1'd1;
         end else begin
-          if (digit != 0 || digit_started || digit_pos == 4) begin
-            suffix[suffix_len] <= "0" + digit;
-            suffix_len <= suffix_len + 1'd1;
-            digit_started <= 1;
+          if (digit != 0 || ndigits != 0 || digit_pos == 4) begin
+            digits <= {digits[15:0], digit};
+            ndigits <= ndigits + 1'd1;
           end
           digit <= 0;
           digit_pos <= digit_pos + 1'd1;
-          if (digit_pos == 4) state <= S_PCM_EXT;
+          if (digit_pos == 4) state <= S_SUFFIX;
         end
-      end
-
-      S_PCM_EXT: begin
-        suffix[suffix_len] <= ".";
-        suffix[suffix_len+1] <= "p";
-        suffix[suffix_len+2] <= "c";
-        suffix[suffix_len+3] <= "m";
-        suffix[suffix_len+4] <= 8'h00;
-        suffix_len <= suffix_len + 4'd5;
-        state <= S_SUFFIX;
       end
 
       // Read-modify-write each suffix byte into the path after base_len
@@ -330,7 +345,7 @@ module msu_apf #(
 
       S_SUFFIX_WR: begin
         fsm_wdata <= fsm_q;
-        fsm_wdata[lane_shift(idx[1:0], little)+:8] <= suffix[suffix_idx];
+        fsm_wdata[lane_shift(idx[1:0], little)+:8] <= suffix_char;
         fsm_we <= 1;
         if (suffix_idx == suffix_len - 1'd1) begin
           idx <= 0;
