@@ -6,15 +6,18 @@ package require ::quartus::project
 # Required for compilation
 package require ::quartus::flow
 
-# Optional second argument "release": build without the MSU-1 debug overlay
-if { $argc < 1 || $argc > 2 } {
-  puts "Usage: generate.tcl <variant> \[release\]"
+# Options after the variant, in any order:
+#   release  build without the MSU-1 debug overlay
+#   fast     skip the timing analyzer; the bitstream is written before it runs
+if { $argc < 1 } {
+  puts "Usage: generate.tcl <variant> \[release\] \[fast\]"
   exit
 }
+set options [lrange $argv 1 end]
 
 project_open projects/snes_pocket.qpf
 
-if { $argc == 2 && [lindex $argv 1] == "release" } {
+if { [lsearch -exact $options "release"] >= 0 } {
   puts "Release build: MSU-1 debug overlay off"
   set_parameter -name MSU_DEBUG -entity core_top '0
 } else {
@@ -87,6 +90,18 @@ if { [lindex $argv 0] == "ntsc" } {
   exit
 }
 
-execute_flow -compile
+if { [lsearch -exact $options "fast"] >= 0 } {
+  puts "Fast build: no timing analysis"
+  # execute_module skips the project's PRE_FLOW_SCRIPT_FILE, which writes build_id.mif
+  set here [pwd]
+  cd projects
+  source ../platform/pocket/build_id_gen.tcl
+  cd $here
+  execute_module -tool map
+  execute_module -tool fit
+  execute_module -tool asm
+} else {
+  execute_flow -compile
+}
 
 project_close

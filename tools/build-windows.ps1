@@ -13,6 +13,7 @@
     .\tools\build-windows.ps1 -PackageOnly        # re-package the last build\msu-test\*.rbf
     .\tools\build-windows.ps1 -Install            # also run the installer afterwards
     .\tools\build-windows.ps1 -Release            # build without the MSU-1 debug overlay
+    .\tools\build-windows.ps1 -Fast               # skip timing analysis (same bitstream)
     .\tools\build-windows.ps1 -Quartus C:\intelFPGA_lite\21.1\quartus\bin64
 #>
 [CmdletBinding()]
@@ -22,6 +23,7 @@ param(
     [string]$Quartus = "",
     [switch]$PackageOnly,
     [switch]$Release,
+    [switch]$Fast,
     [switch]$Install
 )
 
@@ -65,7 +67,10 @@ if (-not $PackageOnly) {
             $log = Join-Path $Work "build_$v.log"
             Write-Host "Building $v (log: $log)..."
             $t = Get-Date
-            if ($Release) { & $sh -t generate.tcl $v release *> $log } else { & $sh -t generate.tcl $v *> $log }
+            $opts = @()
+            if ($Release) { $opts += "release" }
+            if ($Fast) { $opts += "fast" }
+            & $sh -t generate.tcl $v @opts *> $log
             if ($LASTEXITCODE -ne 0) { Get-Content $log -Tail 30; Fail "$v build failed, see $log" }
             $summary = Join-Path $Repo "projects/output_files/snes_pocket.fit.summary"
             Select-String -Path $summary -Pattern "Logic utilization" | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
