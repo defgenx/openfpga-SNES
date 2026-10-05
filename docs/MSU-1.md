@@ -78,6 +78,18 @@ nothing activates their rows between MSU reads.
 - A track whose only partial sector directly follows sector 0 (a file under 2KB) loses that
   partial sector.
 
+## Fit and timing
+
+With MSU-1, the NTSC bitstream uses 17,604 of 18,480 ALMs (95%). Two changes make that fit:
+
+- `bram.patch` turns off upstream's In-System Memory Content Editor hint (~460 ALMs).
+- `snes_pocket.qsf` optimizes for area (`AGGRESSIVE AREA`, no register duplication).
+
+Setup timing still fails on the 21.48MHz and 85.9MHz clocks, as it does without MSU-1. The
+failing paths run between the SNES CPU and the memories; none of them is in MSU logic.
+`core_constraints.sdc` named the SDRAM `ic|nes|sdram` instead of `ic|snes|sdram`, which
+silently dropped its multicycle constraints.
+
 ## Testing
 
 `make -C sim/msu` (Verilator 5) runs the real `core_bridge_cmd`, `data_loader`, `msu_apf`,
