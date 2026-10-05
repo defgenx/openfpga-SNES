@@ -436,7 +436,8 @@ module MAIN_SNES (
       .IO_DAT (ioctl_dout),
       .IO_WR  (spc_download & ioctl_wr),
 
-      .TURBO(cpu_turbo_enabled & turbo_allow),
+      // Like upstream does for SA-1: MSU-1 games are not reliable with the CPU turbo hack
+      .TURBO(cpu_turbo_enabled & turbo_allow & ~msu_enable_s),
       .TURBO_ALLOW(turbo_allow),
 
 `ifdef DEBUG_BUILD

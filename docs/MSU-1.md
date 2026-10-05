@@ -39,11 +39,12 @@ falling back to `bridge_endian_little`.
 
 ### Probe diagnostic
 
-For ~10s after each boot, a 16x16 square in the top-left corner shows the probe result:
+For ~10s after each boot, a 16x16 square in the top-left corner shows the probe result. This is
+a test-build aid: a ROM without a pack shows red.
 
 | Colour | Result |
 |---|---|
-| Green | MSU-1 enabled (`<rom>.msu` opened) |
+| Green | MSU-1 enabled (`<rom>.msu` opened). If the game still plays its original music, the ROM is not the MSU-1 patched one, or the `.pcm` names do not match |
 | Red | `<rom>.msu` not found: check that its name matches the ROM's |
 | Yellow | Open File failed with another error (e.g. malformed path) |
 | Blue | Get Filename on the cartridge slot failed |
@@ -75,6 +76,12 @@ not, it sets `load_overflow`, which nothing reads on hardware; the sim fails on 
 
 `core_top.sv` gives the data slot table's port A to `msu_apf` while `dt_active` is set; the rest
 of the time, that port reports the save size.
+
+## CPU turbo
+
+CPU turbo is forced off while MSU-1 is enabled, the way upstream forces it off for SA-1
+(`TURBO_ALLOW`). On hardware, an MSU-1 game with turbo on booted to a black screen, and another
+reported the MSU-1 chip missing.
 
 ## Memory
 

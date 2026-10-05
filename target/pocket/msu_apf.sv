@@ -14,8 +14,9 @@ module msu_apf #(
     parameter [31:0] DATA_MAX_SIZE = 32'h0100_0000,
     // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
     parameter QUIET_BITS = 20,
-    // Give up on an unanswered target command during the boot probe (2^26 ~ 0.9s)
-    parameter TIMEOUT_BITS = 26
+    // Give up on an unanswered target command during the boot probe: Get/Open File after
+    // 2^29 cycles (~7s), the .msu copy (up to 16MB, several seconds) after 2^30 (~14s)
+    parameter TIMEOUT_BITS = 30
 ) (
     input wire clk_74a,
 
@@ -155,6 +156,7 @@ module msu_apf #(
   reg cmd_timed_out = 0;
   reg [TIMEOUT_BITS-1:0] cmd_timer = 0;
   wire cmd_ok = cmd_err == 0 && !cmd_timed_out;
+  wire cmd_expired = cmd == CMD_READ ? &cmd_timer : &cmd_timer[TIMEOUT_BITS-2:0];
 
   reg prev_download = 0;
   reg probe_pending = 0;
@@ -500,7 +502,7 @@ module msu_apf #(
       S_CMD_WAIT_LOW: begin
         cmd_timer <= cmd_timer + 1'd1;
         if (!target_dataslot_done) state <= S_CMD_WAIT_HIGH;
-        else if (op == OP_PROBE && &cmd_timer) begin
+        else if (op == OP_PROBE && cmd_expired) begin
           cmd_timed_out <= 1;
           state <= cmd_return;
         end
@@ -511,7 +513,7 @@ module msu_apf #(
         if (target_dataslot_done) begin
           cmd_err <= target_dataslot_err;
           state <= cmd_return;
-        end else if (op == OP_PROBE && &cmd_timer) begin
+        end else if (op == OP_PROBE && cmd_expired) begin
           cmd_timed_out <= 1;
           state <= cmd_return;
         end

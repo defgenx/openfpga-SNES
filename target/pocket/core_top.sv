@@ -1111,7 +1111,7 @@ module core_top (
     end
   end
 
-  // MSU-1 probe diagnostic: a 16x16 square in the top-left corner for ~10s after each boot.
+  // MSU-1 probe diagnostic (test builds): a 16x16 square in the top-left corner for ~10s after boot.
   // Colours are listed in docs/MSU-1.md.
   wire [2:0] msu_probe_status_s;
   synch_3 #(
