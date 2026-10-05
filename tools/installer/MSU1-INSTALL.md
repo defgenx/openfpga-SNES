@@ -32,6 +32,13 @@ Put the pack next to the ROM, with the same base name:
 The `.msu` data file is copied to memory at boot (a short black screen for large packs).
 Only its first 16MB are available. Both cores share ROMs and saves.
 
+## Troubleshooting
+
+This test build draws two small squares near the top-left corner of the picture. The left one
+shows MSU-1 detection: green = found, red = `<rom>.msu` not found (check the names), light gray
+= still loading. The README's "Troubleshooting MSU-1" section lists every colour:
+https://github.com/defgenx/openfpga-SNES/tree/feature/msu1#troubleshooting-msu-1
+
 ## Remove
 
 Delete the `Cores/defgenx.SNESMSU` folder from the SD card.
