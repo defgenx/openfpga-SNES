@@ -177,11 +177,11 @@ module MAIN_SNES (
     output wire [31:0] msu_pos_value,
 
     // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
-    input wire msu_copy_req_toggle,
-    input wire msu_copy_bank,
+    input wire [1:0] msu_copy_req_toggle,
     input wire [31:0] msu_copy_base,
     input wire [13:0] msu_copy_len,
-    output wire msu_copy_done_toggle
+    input wire [1:0] msu_fill_done_toggle,
+    output wire [1:0] msu_copy_done_toggle
 );
   parameter USE_CX4 = 1'b0;
   parameter USE_SDD1 = 1'b0;
@@ -1196,9 +1196,9 @@ module MAIN_SNES (
           .load_addr(msu_rx_addr[13:0]),
           .load_data(msu_rx_data),
           .copy_req_toggle(msu_copy_req_toggle),
-          .copy_bank(msu_copy_bank),
           .copy_base(msu_copy_base),
           .copy_len(msu_copy_len),
+          .fill_done_toggle(msu_fill_done_toggle),
           .copy_done_toggle(msu_copy_done_toggle),
 
           .rd_addr(msu_data_addr),

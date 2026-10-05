@@ -1,5 +1,5 @@
 // MSU-1 diagnostic overlay for debug builds, see docs/MSU-1.md for the colours. Square 1
-// (x 32-63) is the boot probe result, square 2 (x 72-103) the APF target command handshake,
+// (x 32-63) is the boot probe result, square 2 (x 72-103) turns orange on a stream underrun,
 // and while streaming a bar (y 72-79) shows how far the stream is ahead of the game.
 module msu_overlay (
     input wire clk,
@@ -58,15 +58,9 @@ module msu_overlay (
     endcase
   end
 
-  reg [23:0] msu_handshake_rgb;
-  always @(*) begin
-    if (stream_underrun) msu_handshake_rgb = 24'hFF8000;  // stream fell behind the game
-    else if (tstate == 4'd14) msu_handshake_rgb = 24'hFF00FF;  // waiting for Ready to Run ack
-    else if (tstate == 4'd15 && !seen_busy) msu_handshake_rgb = 24'hFF0000;  // posted, not picked up
-    else if (tstate == 4'd15) msu_handshake_rgb = 24'hFFFF00;  // busy, not finished
-    else if (seen_ok) msu_handshake_rgb = 24'h00FF00;  // idle, last command answered
-    else msu_handshake_rgb = 24'h0000FF;  // idle, no command answered yet
-  end
+  // Square 2: green, or orange once the stream fell behind the game. tstate/seen_* are kept
+  // as ports for bring-up but no longer drawn, which frees their logic
+  wire [23:0] msu_handshake_rgb = stream_underrun ? 24'hFF8000 : 24'h00FF00;
 
   assign rgb = msu_square1 ? msu_probe_rgb : msu_square2 ? msu_handshake_rgb
       : msu_bar_fill ? 24'h00FF00 : 24'h202020;

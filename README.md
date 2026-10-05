@@ -88,15 +88,11 @@ Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small sq
 | White | The ROM path is unreadable or too long | Shorten the folder or file name |
 | Magenta | The Pocket did not answer within ~7s | Report it |
 
-**Right square: the core's requests to the Pocket**
+**Right square: streaming**
 
 | Color | What happened |
 |---|---|
-| Green | The last request was answered (normal) |
-| Blue | No request answered yet (normal before detection) |
-| Yellow | The Pocket accepted a request but has not finished it (a large `.msu` copy, for a few seconds) |
-| Red | A request is waiting and the Pocket has not picked it up |
-| Magenta | The Pocket never acknowledged the core at startup |
+| Green | Normal |
 | Orange | The game read past the streamed data: the SD card did not keep up (stays orange until the next boot) |
 
 CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.

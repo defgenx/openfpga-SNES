@@ -97,8 +97,9 @@ endmodule
 // The .msu data file in SDRAM banks 2-3 (16MB), reached through the controller's SNI
 // port, which waits for idle slots and so never disturbs ROM timing on port 0.
 // Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface. msu_apf reads the
-// file a chunk at a time into a block RAM bounce buffer, which this copies into SDRAM between
-// the game's reads; while streaming, the banks are a ring around the reader. See docs/MSU-1.md.
+// file a chunk at a time into one of two block RAM bounce buffer banks; this copies each word
+// into SDRAM as soon as it lands, between the game's reads. While streaming, the SDRAM banks
+// are a ring around the reader. See docs/MSU-1.md.
 module msu_sdram_store #(
     parameter RING_BITS = 24,
     parameter CHUNK_WORD_BITS = 11  // two bounce buffer banks of 2^n 32-bit words (8KB each)
@@ -119,12 +120,13 @@ module msu_sdram_store #(
     input wire load_valid,
     input wire [CHUNK_WORD_BITS+2:0] load_addr,
     input wire [31:0] load_data,
-    // Copy the buffered chunk to file offset copy_base; copy_done_toggle follows when written
-    input wire copy_req_toggle,
-    input wire copy_bank,
+    // Per bank: a request (latching copy_base/copy_len) before its chunk arrives, fill done
+    // once it has all arrived, and copy done once it is all in SDRAM
+    input wire [1:0] copy_req_toggle,
     input wire [31:0] copy_base,
     input wire [CHUNK_WORD_BITS+2:0] copy_len,
-    output reg copy_done_toggle = 0,
+    input wire [1:0] fill_done_toggle,
+    output reg [1:0] copy_done_toggle = 0,
 
     // MSU.sv data port
     input wire [31:0] rd_addr,
@@ -146,21 +148,41 @@ module msu_sdram_store #(
     wrap = w & WORD_MASK;
   endfunction
 
-  // Bounce buffer: APF fills it at bridge speed, the copy drains it at SNI speed. msu_apf only
-  // starts the next chunk after copy_done_toggle, so nothing is ever dropped.
+  // Bounce buffer: APF fills a bank at bridge speed, the copy drains it at SNI speed. A bank
+  // is refilled only after its copy is done, so nothing is ever dropped.
   reg [31:0] cbuf[0:(2<<CHUNK_WORD_BITS)-1];
   reg [31:0] cbuf_q = 0;
+
+  wire load_bank = load_addr[CHUNK_WORD_BITS+2];
+  always @(posedge clk_sys) begin
+    if (load_valid) cbuf[load_addr[CHUNK_WORD_BITS+2:2]] <= load_data;
+    cbuf_q <= cbuf[{eng_bank, copy_idx}];
+  end
+
+  // Per bank: chunk to copy, words arrived so far (APF writes them in order), fill complete
+  reg [2:0] req0_s = 0, req1_s = 0, fill0_s = 0, fill1_s = 0;
+  reg [1:0] req_seen = 0;
+  reg [1:0] fill_seen = 0;
+  reg [1:0] pending = 0;
+  reg [1:0] filled = 0;
+  reg [31:0] base0 = 0, base1 = 0;
+  reg [CHUNK_WORD_BITS+2:0] len0 = 0, len1 = 0;
+  reg [CHUNK_WORD_BITS:0] arrived0 = 0, arrived1 = 0;
+  // Delayed a cycle: a word counted here is readable through cbuf_q
+  reg [CHUNK_WORD_BITS:0] arrived0_d = 0, arrived1_d = 0;
+  reg [1:0] filled_d = 0;
+
+  reg eng_bank = 0;  // banks are copied alternately, in the order they are filled
+  reg copying = 0;
+  reg [31:0] copy_cur_base = 0;
   reg [CHUNK_WORD_BITS-1:0] copy_idx = 0;
   reg [CHUNK_WORD_BITS:0] copy_left = 0;  // 32-bit words still to copy
   reg copy_half = 0;  // 1 once the low half of copy_idx is written
   reg copy_q_ok = 0;  // cbuf_q holds copy_idx
-  reg [2:0] copy_req_s = 0;
-  reg copying = 0;
 
-  always @(posedge clk_sys) begin
-    if (load_valid) cbuf[load_addr[CHUNK_WORD_BITS+2:2]] <= load_data;
-    cbuf_q <= cbuf[{copy_bank, copy_idx}];
-  end
+  wire [CHUNK_WORD_BITS:0] eng_arrived_d = eng_bank ? arrived1_d : arrived0_d;
+  wire copy_word_ready = filled_d[eng_bank] || {1'b0, copy_idx} < eng_arrived_d;
+
 
   reg [2:0] seek_resp_s = 0;
   reg [2:0] pos_req_s = 0;
@@ -169,7 +191,6 @@ module msu_sdram_store #(
   always @(posedge clk_sys) begin
     seek_resp_s <= {seek_resp_s[1:0], seek_resp_toggle};
     pos_req_s <= {pos_req_s[1:0], pos_req_toggle};
-    copy_req_s <= {copy_req_s[1:0], copy_req_toggle};
     if (pos_req_s[2] != pos_ack_toggle) begin
       pos_value <= rd_addr;
       pos_ack_toggle <= pos_req_s[2];
@@ -203,11 +224,46 @@ module msu_sdram_store #(
   // The reader crossed into the prefetched word: shift it in and fetch the one after
   wire prefetch_go = st == ST_IDLE && !msu_data_download && !seek_active && next_valid
       && rd_word == wrap(cur_word + 1'd1);
-  wire copy_go = st == ST_IDLE && copying && copy_q_ok && !prefetch_go;
-  // SNI word of the buffered word being copied (copy_base is 4-byte aligned)
-  wire [22:0] copy_sni_word = wrap(copy_base[23:1] + {copy_idx, 1'b0} + copy_half);
+  wire copy_go = st == ST_IDLE && copying && copy_q_ok && copy_word_ready && !prefetch_go;
+  // SNI word of the buffered word being copied (copy_cur_base is 4-byte aligned)
+  wire [22:0] copy_sni_word = wrap(copy_cur_base[23:1] + {copy_idx, 1'b0} + copy_half);
 
   always @(posedge clk_sys) begin
+    req0_s <= {req0_s[1:0], copy_req_toggle[0]};
+    req1_s <= {req1_s[1:0], copy_req_toggle[1]};
+    fill0_s <= {fill0_s[1:0], fill_done_toggle[0]};
+    fill1_s <= {fill1_s[1:0], fill_done_toggle[1]};
+    arrived0_d <= arrived0;
+    arrived1_d <= arrived1;
+    filled_d <= filled;
+
+    if (load_valid && !load_bank) arrived0 <= arrived0 + 1'd1;
+    if (load_valid && load_bank) arrived1 <= arrived1 + 1'd1;
+    // msu_apf requests a bank ~30 clk_74a cycles before APF's first word for it
+    if (req0_s[2] != req_seen[0]) begin
+      req_seen[0] <= req0_s[2];
+      base0 <= copy_base;
+      len0 <= copy_len;
+      arrived0 <= 0;
+      filled[0] <= 0;
+      pending[0] <= 1;
+    end
+    if (req1_s[2] != req_seen[1]) begin
+      req_seen[1] <= req1_s[2];
+      base1 <= copy_base;
+      len1 <= copy_len;
+      arrived1 <= 0;
+      filled[1] <= 0;
+      pending[1] <= 1;
+    end
+    if (fill0_s[2] != fill_seen[0]) begin
+      fill_seen[0] <= fill0_s[2];
+      filled[0] <= 1;
+    end
+    if (fill1_s[2] != fill_seen[1]) begin
+      fill_seen[1] <= fill1_s[2];
+      filled[1] <= 1;
+    end
     // A seek can start while a prefetch is in flight; remember it until ST_IDLE
     old_seek <= rd_seek;
     if (rd_seek && !old_seek) seek_pending <= 1;
@@ -215,15 +271,18 @@ module msu_sdram_store #(
 
     // cbuf_q follows copy_idx one cycle later
     copy_q_ok <= copying;
-    if (!copying && copy_req_s[2] != copy_done_toggle) begin
+    if (!copying && pending[eng_bank]) begin
       copying <= 1;
       copy_idx <= 0;
       copy_half <= 0;
-      copy_left <= (copy_len + 2'd3) >> 2;
+      copy_cur_base <= eng_bank ? base1 : base0;
+      copy_left <= ((eng_bank ? len1 : len0) + 2'd3) >> 2;
       copy_q_ok <= 0;
     end else if (copying && copy_left == 0) begin
       copying <= 0;
-      copy_done_toggle <= copy_req_s[2];
+      pending[eng_bank] <= 0;
+      copy_done_toggle[eng_bank] <= req_seen[eng_bank];
+      eng_bank <= ~eng_bank;
     end
 
     case (st)

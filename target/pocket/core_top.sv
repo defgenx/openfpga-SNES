@@ -692,11 +692,11 @@ module core_top (
   wire msu_pos_req_toggle;
   wire msu_pos_ack_toggle;
   wire [31:0] msu_pos_value;
-  wire msu_copy_req_toggle;
-  wire msu_copy_bank;
+  wire [1:0] msu_copy_req_toggle;
   wire [31:0] msu_copy_base;
   wire [13:0] msu_copy_len;
-  wire msu_copy_done_toggle;
+  wire [1:0] msu_fill_done_toggle;
+  wire [1:0] msu_copy_done_toggle;
 
   msu_apf msu_apf (
       .clk_74a(clk_74a),
@@ -750,9 +750,9 @@ module core_top (
       .pos_value(msu_pos_value),
 
       .copy_req_toggle(msu_copy_req_toggle),
-      .copy_bank(msu_copy_bank),
       .copy_base(msu_copy_base),
       .copy_len(msu_copy_len),
+      .fill_done_toggle(msu_fill_done_toggle),
       .copy_done_toggle(msu_copy_done_toggle)
   );
 
@@ -1117,9 +1117,9 @@ module core_top (
       .msu_pos_value(msu_pos_value),
 
       .msu_copy_req_toggle(msu_copy_req_toggle),
-      .msu_copy_bank(msu_copy_bank),
       .msu_copy_base(msu_copy_base),
       .msu_copy_len(msu_copy_len),
+      .msu_fill_done_toggle(msu_fill_done_toggle),
       .msu_copy_done_toggle(msu_copy_done_toggle)
   );
 

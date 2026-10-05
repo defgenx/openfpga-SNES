@@ -61,16 +61,8 @@ default), two 32x32 squares are drawn near the top-left corner (`target/pocket/m
 | White | The ROM path has no terminator or is too long to extend |
 | Magenta | APF did not answer a command in time |
 
-Square 2 (x 72-103) shows `core_bridge_cmd`'s target command handshake:
-
-| Colour | State |
-|---|---|
-| Magenta | Waiting for APF to acknowledge Ready to Run (0x0140) |
-| Red | A command is posted and APF has not picked it up |
-| Yellow | APF reported busy and has not finished |
-| Green | Idle, the last command was answered |
-| Blue | Idle, no command answered yet |
-| Orange | Stream underrun: the game read past `win_end` (stays orange) |
+Square 2 (x 72-103) is green, or orange once `stream_underrun` is set: the game read past
+`win_end`. It stays orange until the next boot.
 
 While streaming, a bar (y 72-79, x 32-95) shows `stream_fill`: the bytes between the reader and
 `win_end`, in 1/64ths of `STREAM_AHEAD`, sampled at each fetch decision.
@@ -89,12 +81,17 @@ reported the MSU-1 chip missing.
 ## Streaming
 
 Every `.msu` read goes through a **bounce buffer**: two 8KB banks of block RAM in
-`msu_sdram_store`. APF fills one bank at bridge speed while the store copies the other to
-SDRAM, interleaved with the game's reads, which go first. `msu_apf` hands a filled bank over
-(`copy_req_toggle`, `copy_bank`, `copy_base`, `copy_len`) and reuses it only after
-`copy_done_toggle`. Nothing can be dropped: on hardware, a write queue fed straight from the
-bridge overflowed while the game read, and Super Road Blaster then executed garbage
-("BRK encountered ... Hdma::init()").
+`msu_sdram_store`. Before each read, `msu_apf` claims a bank (`copy_req_toggle[bank]`, with
+`copy_base`/`copy_len`). The store copies each word to SDRAM as soon as it lands, between the
+game's reads, which go first. After the read, `fill_done_toggle[bank]` marks the chunk
+complete, and `copy_done_toggle[bank]` returns once all of it is in SDRAM; only then is the bank
+reused. Chunks alternate banks and complete in order.
+
+Nothing can be dropped this way. On hardware, a write queue fed straight from the bridge
+overflowed while the game read, and Super Road Blaster then executed garbage ("BRK encountered
+... Hdma::init()"). Copying as words arrive, rather than after a whole chunk, keeps a seek's
+latency to APF's read time: copying after the fact brought back "Timeout while seeking address
+in MSU1 data-file".
 
 A `.msu` file up to 16MB (`DATA_MAX_SIZE`) is copied whole at boot this way, chunk by chunk,
 and the game then reads it from SDRAM. A larger one, e.g. Super Road Blaster's video, is
@@ -104,11 +101,11 @@ streamed:
   (`RING_BITS`). `msu_apf` tracks the file bytes `[win_start, win_end)` that are in SDRAM, and
   `fetch_end`, up to which bytes are read or being copied.
 - **Seek:** `msu_sdram_store` forwards the seek to `msu_apf` (`data_seek_req_toggle`). If the
-  offset is outside the window, the window restarts there, once a copy in flight is done. The
+  offset is outside the window, the window restarts there, once copies in flight are done. The
   seek completes, and MSU-1's data busy bit clears, once `STREAM_LEAD` (4KB) past it is in
   SDRAM, fetched as a single read. Super Road Blaster gives up ("Timeout while seeking address
   in MSU1 data-file") when a seek waited for 64KB behind a 16KB chunk already in flight.
-- **Read-ahead:** between other work, `msu_apf` polls the reader's position (`pos_req_toggle`)
+- **Read-ahead:** starts at the game's first seek. Between other work, `msu_apf` polls the reader's position (`pos_req_toggle`)
   and fetches the next `STREAM_CHUNK` (8KB) while `fetch_end` is less than `STREAM_AHEAD`
   (256KB) past it.
 - **Priority:** `.pcm` sector requests go before data chunks.

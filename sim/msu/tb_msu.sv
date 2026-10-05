@@ -231,9 +231,9 @@ module tb_msu;
       .pos_ack_toggle(pos_ack_t),
       .pos_value(pos_value),
       .copy_req_toggle(copy_req_t),
-      .copy_bank(copy_bank),
       .copy_base(copy_base),
       .copy_len(copy_len),
+      .fill_done_toggle(fill_done_t),
       .copy_done_toggle(copy_done_t)
   );
 
@@ -379,7 +379,7 @@ module tb_msu;
   reg [15:0] sni_dout = 0;
   wire sni_wr_req, sni_rd_req;
   reg sni_ready = 0;
-  wire copy_req_t, copy_done_t, copy_bank;
+  wire [1:0] copy_req_t, copy_done_t, fill_done_t;
   wire [31:0] copy_base;
   wire [13:0] copy_len;
 
@@ -402,9 +402,9 @@ module tb_msu;
       .load_addr(rx_addr[13:0]),
       .load_data(rx_data),
       .copy_req_toggle(copy_req_t),
-      .copy_bank(copy_bank),
       .copy_base(copy_base),
       .copy_len(copy_len),
+      .fill_done_toggle(fill_done_t),
       .copy_done_toggle(copy_done_t),
       .rd_addr(m_data_addr),
       .rd_seek(m_data_seek),
@@ -682,6 +682,7 @@ module tb_msu;
   always @(posedge audio_download) $display("[%0t] audio_download up, len=%0d off=%0d", $time, dut_apf.read_length, dut_apf.read_offset);
   always @(posedge m_stop) $display("[%0t] msu_audio stop, sector=%0d size=%0d", $time, m_sector, m_audio_size);
 
+  realtime seek_t0, seek_max = 0;
   initial begin : test
     reg [7:0] v, st;
     integer i, base;
@@ -749,7 +750,9 @@ module tb_msu;
         cpu_write(1, base[15:8]);
         cpu_write(2, 0);
         cpu_write(3, 0);
+        seek_t0 = $realtime;
         wait_status_clear(7, "data busy");
+        if ($realtime - seek_t0 > seek_max) seek_max = $realtime - seek_t0;
         for (i = 0; i < 600 && base + i < MSU_SIZE; i = i + 1) begin
           cpu_read(1, v);
           if (v !== file_byte(1, base + i)) begin
@@ -775,7 +778,7 @@ module tb_msu;
         end
         $display("[%0t] streamed 20000 bytes across the %0d-byte ring", $time, 1 << RING_BITS);
       end
-      $display("[%0t] data port checked", $time);
+      $display("[%0t] data port checked, longest seek %0.1f us", $time, seek_max / 1000.0);
 
       // Missing track
       cpu_write(4, 2);
