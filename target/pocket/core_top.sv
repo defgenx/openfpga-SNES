@@ -389,6 +389,9 @@ module core_top (
         32'h300: begin
           msu_debug_squares <= bridge_wr_data[0];
         end
+        32'h304: begin
+          region_override <= bridge_wr_data[1:0];
+        end
       endcase
     end
   end
@@ -831,7 +834,14 @@ module core_top (
   reg mouse_enabled;
 
   reg use_square_pixels = 0;
+  // PAL clock bitstream (set by generate.tcl); declared before its first use below
+  parameter PAL_PLL = 1'b0;
+
   reg msu_debug_squares = 0;
+  // Region setting: 0 = from the ROM header (the loader's PAL), 1 = NTSC, 2 = PAL. Only the
+  // SNES video mode changes; the clock stays the loaded bitstream's (PAL_PLL)
+  reg [1:0] region_override = 0;
+  wire region_pal = region_override == 2'd1 ? 1'b0 : region_override == 2'd2 ? 1'b1 : PAL;
   reg blend_enabled = 0;
 
   // Settings sync
@@ -991,7 +1001,8 @@ module core_top (
       .rom_type(rom_type),
       .rom_size(rom_size),
       .ram_size(ram_size),
-      .PAL(PAL),
+      .PAL(region_pal),
+      .pal_clock(PAL_PLL),
 
       // Save input/output
       .save_download(save_download_s),
@@ -1208,7 +1219,6 @@ module core_top (
 
   wire pll_core_locked;
 
-  parameter PAL_PLL = 1'b0;
 
   generate
     if (PAL_PLL) begin

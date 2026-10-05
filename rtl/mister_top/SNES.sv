@@ -84,6 +84,7 @@ module MAIN_SNES (
     input wire [3:0] rom_size,
     input wire [3:0] ram_size,
     input wire PAL,
+    input wire pal_clock,  // clk_sys is the PAL frequency (21.28MHz); PAL can be overridden
 
     // Saves
     input wire save_download,
@@ -1146,7 +1147,7 @@ module MAIN_SNES (
           .reset(reset),
 
           .clk(clk_sys),
-          .clk_rate(PAL ? 21281370 : 21477270),
+          .clk_rate(pal_clock ? 21281370 : 21477270),
 
           .ctl_volume(msu_volume),
           .ctl_stop(msu_audio_stop),

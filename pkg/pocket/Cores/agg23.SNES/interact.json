@@ -139,6 +139,30 @@
         "value": 1
       },
       {
+        "name": "Region",
+        "id": 51,
+        "type": "list",
+        "enabled": true,
+        "address": "0x304",
+        "persist": true,
+        "writeonly": true,
+        "defaultval": 0,
+        "options": [
+          {
+            "name": "Auto",
+            "value": 0
+          },
+          {
+            "name": "NTSC",
+            "value": 1
+          },
+          {
+            "name": "PAL",
+            "value": 2
+          }
+        ]
+      },
+      {
         "name": "MSU-1 Debug Squares",
         "id": 50,
         "type": "check",
