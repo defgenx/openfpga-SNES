@@ -98,7 +98,8 @@ and the game then reads it from SDRAM. A larger one, e.g. Super Road Blaster's v
 streamed:
 
 - **Ring:** SDRAM banks 2-3 become a ring, with file byte X at SDRAM address X mod 16MB
-  (`RING_BITS`). `msu_apf` tracks the file bytes `[win_start, win_end)` that are in SDRAM, and
+  (`RING_BITS`). Offsets are 30 bits, so files up to 1GB, as on MiSTer. `msu_apf` tracks the
+  file bytes `[win_start, win_end)` that are in SDRAM, and
   `fetch_end`, up to which bytes are read or being copied.
 - **Seek:** `msu_sdram_store` forwards the seek to `msu_apf` (`data_seek_req_toggle`). If the
   offset is outside the window, the window restarts there, once copies in flight are done. The

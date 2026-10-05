@@ -165,7 +165,7 @@ module msu_sdram_store #(
   reg [1:0] fill_seen = 0;
   reg [1:0] pending = 0;
   reg [1:0] filled = 0;
-  reg [31:0] base0 = 0, base1 = 0;
+  reg [23:0] base0 = 0, base1 = 0;  // the ring only uses the low 24 bits of the file offset
   reg [CHUNK_WORD_BITS+2:0] len0 = 0, len1 = 0;
   reg [CHUNK_WORD_BITS:0] arrived0 = 0, arrived1 = 0;
   // Delayed a cycle: a word counted here is readable through cbuf_q
@@ -174,7 +174,7 @@ module msu_sdram_store #(
 
   reg eng_bank = 0;  // banks are copied alternately, in the order they are filled
   reg copying = 0;
-  reg [31:0] copy_cur_base = 0;
+  reg [23:0] copy_cur_base = 0;
   reg [CHUNK_WORD_BITS-1:0] copy_idx = 0;
   reg [CHUNK_WORD_BITS:0] copy_left = 0;  // 32-bit words still to copy
   reg copy_half = 0;  // 1 once the low half of copy_idx is written
@@ -242,7 +242,7 @@ module msu_sdram_store #(
     // msu_apf requests a bank ~30 clk_74a cycles before APF's first word for it
     if (req0_s[2] != req_seen[0]) begin
       req_seen[0] <= req0_s[2];
-      base0 <= copy_base;
+      base0 <= copy_base[23:0];
       len0 <= copy_len;
       arrived0 <= 0;
       filled[0] <= 0;
@@ -250,7 +250,7 @@ module msu_sdram_store #(
     end
     if (req1_s[2] != req_seen[1]) begin
       req_seen[1] <= req1_s[2];
-      base1 <= copy_base;
+      base1 <= copy_base[23:0];
       len1 <= copy_len;
       arrived1 <= 0;
       filled[1] <= 0;

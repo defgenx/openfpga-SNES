@@ -89,8 +89,8 @@ module msu_apf #(
     // (with copy_base/copy_len, latched by the store), fill done after it, and copy done once
     // the chunk is in SDRAM; a bank is reused only after its copy is done
     output reg [1:0] copy_req_toggle = 0,
-    output reg [31:0] copy_base = 0,
-    output reg [13:0] copy_len = 0,
+    output wire [31:0] copy_base,  // the chunk's read_offset/read_length, stable for the read
+    output wire [13:0] copy_len,
     output reg [1:0] fill_done_toggle = 0,
     input wire [1:0] copy_done_toggle,
     input wire data_seek_req_toggle,
@@ -279,7 +279,7 @@ module msu_apf #(
   reg [1:0] dt_wait;
 
   reg [31:0] read_offset;
-  reg [31:0] read_length;
+  reg [13:0] read_length;  // chunks and .pcm sectors are at most 8KB
   reg [9:0] drain;
 
   wire [15:0] opened_slot = op == OP_PROBE || op == OP_DATA ? DATA_SLOT_ID : AUDIO_SLOT_ID;
@@ -289,10 +289,12 @@ module msu_apf #(
 
   // Streaming window: file bytes [win_start, win_end) are in SDRAM; [win_end, fetch_end) is
   // read from APF and waiting for, or in, its copy
-  reg [31:0] data_size = 0;
-  reg [31:0] win_start = 0;
-  reg [31:0] win_end = 0;
-  reg [31:0] fetch_end = 0;
+  // .msu offsets are 30 bits: files up to 1GB, MiSTer's limit too
+  localparam OB = 30;
+  reg [OB-1:0] data_size = 0;
+  reg [OB-1:0] win_start = 0;
+  reg [OB-1:0] win_end = 0;
+  reg [OB-1:0] fetch_end = 0;
   reg [1:0] copy_outstanding = 0;  // per bank: read issued, chunk not yet in SDRAM
   reg [13:0] pend_len0 = 0;
   reg [13:0] pend_len1 = 0;
@@ -303,16 +305,19 @@ module msu_apf #(
   wire bank_free = !copy_outstanding[cur_bank];
   wire done_bank_copied = done_bank ? copy_done1_s[2] == copy_req_toggle[1]
       : copy_done0_s[2] == copy_req_toggle[0];
-  reg [31:0] seek_target = 0;
+  reg [OB-1:0] seek_target = 0;
   reg seek_waiting = 0;
-  wire [31:0] stream_base = seek_waiting ? seek_target : pos_value;
-  wire [31:0] stream_base_w = {stream_base[31:2], 2'b00};  // the window is word-aligned
-  wire [31:0] stream_left = data_size - fetch_end;
+  wire [OB-1:0] stream_base = seek_waiting ? seek_target : pos_value[OB-1:0];
+  wire [OB-1:0] stream_base_w = {stream_base[OB-1:2], 2'b00};  // the window is word-aligned
+  wire [OB-1:0] stream_left = data_size - fetch_end;
+  wire [OB-1:0] seek_addr = data_seek_addr[OB-1:0];
   // Seeks get a short read so they complete quickly; read-ahead and the boot copy use chunks
-  wire [31:0] chunk_limit = seek_waiting && !preloading ? STREAM_LEAD : STREAM_CHUNK;
-  wire [31:0] chunk_length = stream_left < chunk_limit ? stream_left : chunk_limit;
-  wire seek_restart = data_seek_addr < win_start || data_seek_addr >= fetch_end
-      || fetch_end - data_seek_addr >= RING_SIZE - STREAM_GUARD;
+  wire [13:0] chunk_limit = seek_waiting && !preloading ? STREAM_LEAD[13:0] : STREAM_CHUNK[13:0];
+  wire [13:0] chunk_length = stream_left < chunk_limit ? stream_left[13:0] : chunk_limit;
+  assign copy_base = read_offset;
+  assign copy_len = read_length;
+  wire seek_restart = seek_addr < win_start || seek_addr >= fetch_end
+      || fetch_end - seek_addr >= RING_SIZE - STREAM_GUARD;
 
   // core_bridge_cmd copies these when it starts the queued command; they hold until done
   assign target_dataslot_id = cmd == CMD_GETFILE ? 16'd0 : opened_slot;
@@ -397,13 +402,13 @@ module msu_apf #(
           // STREAM_GUARD behind fetch_end are still in the ring), else restart it there once
           // the chunk being copied is in
           data_seek_seen <= data_seek_s[2];
-          seek_target <= data_seek_addr;
+          seek_target <= seek_addr;
           seek_waiting <= 1;
           stream_started <= 1;
           if (seek_restart) begin
-            win_start <= {data_seek_addr[31:2], 2'b00};
-            win_end <= {data_seek_addr[31:2], 2'b00};
-            fetch_end <= {data_seek_addr[31:2], 2'b00};
+            win_start <= {seek_addr[OB-1:2], 2'b00};
+            win_end <= {seek_addr[OB-1:2], 2'b00};
+            fetch_end <= {seek_addr[OB-1:2], 2'b00};
           end
         end else if (stream_mode && seek_waiting
             && (win_end >= seek_target + STREAM_LEAD || win_end >= data_size)) begin
@@ -439,14 +444,12 @@ module msu_apf #(
           end
         end else if (fetch_end - stream_base_w < STREAM_AHEAD && bank_free) begin  // < ring size
           op <= OP_DATA;
-          read_offset <= fetch_end;
+          read_offset <= {{(32 - OB) {1'b0}}, fetch_end};
           read_length <= chunk_length;
-          copy_base <= fetch_end;
-          copy_len <= chunk_length[13:0];
           copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
           copy_outstanding[cur_bank] <= 1;
-          if (cur_bank) pend_len1 <= chunk_length[13:0];
-          else pend_len0 <= chunk_length[13:0];
+          if (cur_bank) pend_len1 <= chunk_length;
+          else pend_len0 <= chunk_length;
           drain <= 0;
           state <= S_READ;
         end
@@ -606,7 +609,7 @@ module msu_apf #(
           else if (cmd_err == 3'd2) probe_status <= 4'd8;  // slot undefined
           else if (cmd_err == 3'd5) probe_status <= 4'd9;  // general error
           else probe_status <= 4'd10;
-          data_size <= slot_size;
+          data_size <= slot_size[31:OB] != 0 ? {{(OB - 2) {1'b1}}, 2'b00} : slot_size[OB-1:0];
           win_start <= 0;
           win_end <= 0;
           fetch_end <= 0;
@@ -657,14 +660,12 @@ module msu_apf #(
           end
         end else if (bank_free) begin
           op <= OP_DATA;
-          read_offset <= fetch_end;
+          read_offset <= {{(32 - OB) {1'b0}}, fetch_end};
           read_length <= chunk_length;
-          copy_base <= fetch_end;
-          copy_len <= chunk_length[13:0];
           copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
           copy_outstanding[cur_bank] <= 1;
-          if (cur_bank) pend_len1 <= chunk_length[13:0];
-          else pend_len0 <= chunk_length[13:0];
+          if (cur_bank) pend_len1 <= chunk_length;
+          else pend_len0 <= chunk_length;
           drain <= 0;
           state <= S_READ;
         end
