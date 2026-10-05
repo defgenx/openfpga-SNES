@@ -847,7 +847,17 @@ module core_top (
   // Region setting: 0 = from the ROM header (the loader's PAL), 1 = NTSC, 2 = PAL. Only the
   // SNES video mode changes; the clock stays the loaded bitstream's (PAL_PLL)
   reg [1:0] region_override = 0;
-  wire region_pal = region_override == 2'd1 ? 1'b0 : region_override == 2'd2 ? 1'b1 : PAL;
+  wire region_pal_select = region_override == 2'd1 ? 1'b0 : region_override == 2'd2 ? 1'b1 : PAL;
+  // Applied only while the SNES is held in reset (ROM load or Reset Core): switching timing
+  // under a running game crashes it, as on MiSTer, where a region change needs a reload
+  reg region_pal = 0;
+  always @(posedge clk_74a) if (ioctl_download || reset_button) region_pal <= region_pal_select;
+  wire region_pal_s;
+  synch_3 region_pal_sync (
+      region_pal,
+      region_pal_s,
+      clk_sys_21_48
+  );
   reg blend_enabled = 0;
 
   // Settings sync
@@ -1007,7 +1017,7 @@ module core_top (
       .rom_type(rom_type),
       .rom_size(rom_size),
       .ram_size(ram_size),
-      .PAL(region_pal),
+      .PAL(region_pal_s),
       .pal_clock(PAL_PLL),
 
       // Save input/output

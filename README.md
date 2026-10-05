@@ -66,7 +66,7 @@ MSU-1 is enabled when `<rom>.msu` exists. A data file up to 16MB is copied to me
 
 ##### Region / Refresh
 
-The **Region / Refresh** setting (Auto, NTSC 60Hz or PAL 50Hz) overrides the region and refresh rate the ROM header asks for; on the SNES they are one signal. The loader still picks the NTSC or PAL bitstream from the header before the core starts, so a forced region runs on the other region's clock, about 0.9% fast or slow.
+The **Region / Refresh** setting (Auto, NTSC 60Hz or PAL 50Hz) overrides the region and refresh rate the ROM header asks for; on the SNES they are one signal. A change takes effect on the next game load or **Reset Core**. The loader still picks the NTSC or PAL bitstream from the header before the core starts, so a forced region runs on the other region's clock, about 0.9% fast or slow.
 
 ##### Troubleshooting MSU-1
 
