@@ -11,8 +11,9 @@ The Pocket has neither, so two Pocket modules replace them:
 | `rtl/mister_top/msu_pocket.sv` → `msu_host` | `clk_sys` | `hps_ext.v`: track mounting/missing and sector ack handshakes |
 | `rtl/mister_top/msu_pocket.sv` → `msu_sdram_store` | `clk_sys` | `msu_data_store.sv` + DDR3: the `.msu` file in SDRAM |
 
-MSU is built into the `main` (NTSC) and `PAL` bitstreams (`USE_MSU` in `generate.tcl`), but
-not into `SPCSDD1`.
+MSU is built into all three bitstreams (`USE_MSU` in `generate.tcl`): `main`, `PAL` and
+`SPCSDD1`. The chip32 loader picks one from the ROM header, so a pack must work whichever it
+picks.
 
 ## File lookup
 

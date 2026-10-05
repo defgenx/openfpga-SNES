@@ -50,7 +50,7 @@ The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi 
 
 > **Warning**: Experimental, not yet tested on hardware
 
-The homebrew MSU-1 chip (CD-quality audio tracks and a streamed data file) is supported in the main and PAL cores, using the MiSTer naming scheme. Put the pack next to the ROM, with the same base name:
+The homebrew MSU-1 chip (CD-quality audio tracks and a streamed data file) is supported in all bitstreams, using the MiSTer naming scheme. Put the pack next to the ROM, with the same base name:
 
 ```
 /Assets/snes/common/Zelda MSU/zelda.sfc
