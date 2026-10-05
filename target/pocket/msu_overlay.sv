@@ -1,5 +1,5 @@
 // MSU-1 diagnostic overlay for debug builds, see docs/MSU-1.md for the colours. Square 1
-// (x 32-63) is the boot probe result, square 2 (x 72-103) turns orange on a stream underrun,
+// (x 32-63) is the boot probe result, square 2 (x 72-103) the longest streaming seek or an underrun,
 // and while streaming a bar (y 72-79) shows how far the stream is ahead of the game.
 module msu_overlay (
     input wire clk,
@@ -12,6 +12,7 @@ module msu_overlay (
     input wire stream_underrun,  // the game read past the streamed data
     input wire stream_mode,
     input wire [5:0] stream_fill,  // streamed bytes ahead of the game, 63 = full read-ahead
+    input wire [1:0] seek_slowest,  // longest streaming seek: 1 under 10ms, 2 under 30ms, 3 longer
     output wire on,
     output wire [23:0] rgb
 );
@@ -58,9 +59,12 @@ module msu_overlay (
     endcase
   end
 
-  // Square 2: green, or orange once the stream fell behind the game. tstate/seen_* are kept
-  // as ports for bring-up but no longer drawn, which frees their logic
-  wire [23:0] msu_handshake_rgb = stream_underrun ? 24'hFF8000 : 24'h00FF00;
+  // Square 2: orange once the stream fell behind the game, else the longest streaming seek:
+  // gray none yet, green under 10ms, yellow under 30ms, red 30ms or more. tstate/seen_* are
+  // kept as ports for bring-up but no longer drawn, which frees their logic
+  wire [23:0] msu_handshake_rgb = stream_underrun ? 24'hFF8000
+      : seek_slowest == 2'd0 ? 24'h404040 : seek_slowest == 2'd1 ? 24'h00FF00
+      : seek_slowest == 2'd2 ? 24'hFFFF00 : 24'hFF0000;
 
   assign rgb = msu_square1 ? msu_probe_rgb : msu_square2 ? msu_handshake_rgb
       : msu_bar_fill ? 24'h00FF00 : 24'h202020;

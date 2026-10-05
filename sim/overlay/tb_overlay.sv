@@ -49,6 +49,7 @@ module tb_overlay;
       .stream_underrun(1'b0),
       .stream_mode(1'b1),
       .stream_fill(6'd20),
+      .seek_slowest(2'd1),
       .on(on),
       .rgb(orgb)
   );

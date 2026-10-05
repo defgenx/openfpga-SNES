@@ -135,6 +135,7 @@ module main #(
 	output            MSU_DATA_SEEK,
 	output            MSU_DATA_REQ,
 	input             MSU_ENABLE,
+	input             MSU_STALL,
 
 	input             SS_SAVE,
 	input             SS_TOSD,
@@ -185,7 +186,7 @@ SNES SNES
 	.dspclk(ACLK),
 
 	.rst_n(RESET_N),
-	.enable(1),
+	.enable(~MSU_STALL),
 
 	.ca(CA),
 	.cpurd_n(CPURD_N),

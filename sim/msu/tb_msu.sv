@@ -675,6 +675,8 @@ module tb_msu;
     integer n;
     n = 0;
     do begin
+      // A frozen console does not poll
+      while (store.stall) @(posedge clk_sys);
       cpu_read(0, st);
       n = n + 1;
       if (n > 200000) begin
@@ -737,6 +739,14 @@ module tb_msu;
   always @(posedge m_stop) $display("[%0t] msu_audio stop, sector=%0d size=%0d", $time, m_sector, m_audio_size);
 
   realtime seek_t0, seek_max = 0;
+  // The store freezes the console during slow seeks: the game's poll loop does not run then,
+  // so frozen time does not count against its timeout
+  realtime stall_t0, stall_acc = 0, stall_max = 0, stall_acc0;
+  always @(posedge store.stall) stall_t0 = $realtime;
+  always @(negedge store.stall) begin
+    stall_acc = stall_acc + ($realtime - stall_t0);
+    if ($realtime - stall_t0 > stall_max) stall_max = $realtime - stall_t0;
+  end
 
   task automatic srb_seek(input integer addr);
     cpu_write(0, addr[7:0]);
@@ -744,8 +754,10 @@ module tb_msu;
     cpu_write(2, addr[23:16]);
     cpu_write(3, 0);
     seek_t0 = $realtime;
+    stall_acc0 = stall_acc;
     wait_status_clear(7, "data busy (SRB seek)");
-    if ($realtime - seek_t0 > seek_max) seek_max = $realtime - seek_t0;
+    if ($realtime - seek_t0 - (stall_acc - stall_acc0) > seek_max)
+      seek_max = $realtime - seek_t0 - (stall_acc - stall_acc0);
   endtask
 
   task automatic srb_read(input integer addr, input integer n);
@@ -904,8 +916,8 @@ module tb_msu;
       srb_read(frame + 5000, 256);
     end
     cpu_write(7, 8'h00);
-    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us (budget %0d us), %0d slot switches, %0d samples",
-             $time, seek_max / 1000.0, SEEK_BUDGET_US, slot_switches, cap_count);
+    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us of game time (budget %0d us), longest freeze %0.1f us, %0d slot switches, %0d samples",
+             $time, seek_max / 1000.0, SEEK_BUDGET_US, stall_max / 1000.0, slot_switches, cap_count);
     if (seek_max > SEEK_BUDGET_US * 1000.0) begin
       $display("FAIL: a seek took longer than the game allows");
       errors = errors + 1;
@@ -1079,7 +1091,8 @@ module tb_msu;
   end
 
   initial begin
-    #2_000_000_000;
+    if (SWITCH_US > 10000) #10_000_000_000;  // slow-SD case: tens of ms per slot switch
+    else #2_000_000_000;
     $display("FAIL: global timeout");
     $finish;
   end

@@ -115,6 +115,11 @@ module msu_sdram_store #(
     output reg pos_ack_toggle = 0,
     output reg [31:0] pos_value = 0,
     output reg pos_seeking = 0,  // pos_value was taken while a seek was in flight
+    // A streaming seek slower than STALL_AFTER freezes the SNES until it completes (or until
+    // STALL_MAX), so the game cannot time it out. seek_slowest: longest seek so far, for the
+    // debug overlay: 0 none, 1 under 10ms, 2 under 30ms, 3 longer
+    output wire stall,
+    output reg [1:0] seek_slowest = 0,
 
     // Bounce buffer: chunk words from msu_bridge_rx, addressed {bank, byte offset in chunk}
     input wire msu_data_download,  // boot copy in progress: the SNES is in reset
@@ -200,6 +205,22 @@ module msu_sdram_store #(
   reg [2:0] pos_req_s = 0;
   reg stream_seek_wait = 0;
   reg last_was_read = 0;
+  // clk_sys is ~21.3MHz: 5ms, 10ms, 30ms, and a 1.5s cap
+  localparam [25:0] STALL_AFTER = 26'd106_000;
+  localparam [25:0] SLOW_10MS = 26'd213_000;
+  localparam [25:0] SLOW_30MS = 26'd640_000;
+  localparam [25:0] STALL_MAX = 26'd32_000_000;
+  reg [25:0] seek_timer = 0;
+  assign stall = stream_seek_wait && seek_timer >= STALL_AFTER && seek_timer < STALL_MAX;
+  always @(posedge clk_sys) begin
+    if (!stream_seek_wait) seek_timer <= 0;
+    else if (seek_timer != STALL_MAX) seek_timer <= seek_timer + 1'd1;
+    if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) begin
+      if (seek_timer >= SLOW_30MS) seek_slowest <= 2'd3;
+      else if (seek_timer >= SLOW_10MS && seek_slowest < 2'd2) seek_slowest <= 2'd2;
+      else if (seek_slowest == 2'd0) seek_slowest <= 2'd1;
+    end
+  end
   always @(posedge clk_sys) begin
     seek_resp_s <= {seek_resp_s[1:0], seek_resp_toggle};
     pos_req_s <= {pos_req_s[1:0], pos_req_toggle};

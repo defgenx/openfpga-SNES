@@ -88,7 +88,10 @@ Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small sq
 
 | Color | What happened |
 |---|---|
-| Green | Normal |
+| Gray | No streaming seek yet |
+| Green | Longest seek so far under 10ms |
+| Yellow | Longest seek 10-30ms: the core froze the game briefly to hide it |
+| Red | A seek took 30ms or more: the core froze the game until the SD card caught up |
 | Orange | The game read past the streamed data: the SD card did not keep up (stays orange until the next boot) |
 
 CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.

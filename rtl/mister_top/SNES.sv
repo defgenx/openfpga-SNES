@@ -176,6 +176,7 @@ module MAIN_SNES (
     output wire msu_pos_ack_toggle,
     output wire [31:0] msu_pos_value,
     output wire msu_pos_seeking,
+    output wire [1:0] msu_seek_slowest,  // debug overlay, see msu_sdram_store
 
     // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
     input wire [1:0] msu_copy_req_toggle,
@@ -356,6 +357,9 @@ module MAIN_SNES (
   wire [7:0] G;
   wire [7:0] B;
 
+  // Freezes the console while a slow MSU-1 streaming seek completes
+  wire msu_stall;
+
   main #(
       .USE_CX4(USE_CX4),
       .USE_SDD1(USE_SDD1),
@@ -488,6 +492,7 @@ module MAIN_SNES (
       .MSU_DATA_SEEK(msu_data_seek),
       .MSU_DATA_REQ(msu_data_req),
       .MSU_ENABLE(msu_enable_s),
+      .MSU_STALL(msu_stall),
 
       .AUDIO_L(main_audio_l),
       .AUDIO_R(main_audio_r),
@@ -603,7 +608,9 @@ module MAIN_SNES (
       .dout1(),
       .wr1(1'b0),
       .rd1(1'b0),
-      .rfs1(cart_download ? 1'b0 : !RESET_N ? RFSH : snes_refresh),
+      // The CPU's refresh request stops while an MSU-1 seek freezes the console: refresh
+      // from RFSH then, as in reset, or a freeze over ~64ms loses SDRAM contents
+      .rfs1(cart_download ? 1'b0 : !RESET_N || msu_stall ? RFSH : snes_refresh),
       .word1(1'b0),
 
       // SNI: MSU-1 data file in banks 2-3
@@ -1194,6 +1201,8 @@ module MAIN_SNES (
           .pos_ack_toggle(msu_pos_ack_toggle),
           .pos_value(msu_pos_value),
           .pos_seeking(msu_pos_seeking),
+          .stall(msu_stall),
+          .seek_slowest(msu_seek_slowest),
 
           .msu_data_download(msu_data_download_s),
           .load_valid(msu_rx_valid & ~msu_rx_addr[27]),
@@ -1222,6 +1231,8 @@ module MAIN_SNES (
     end else begin : no_msu
       assign msu_track_mounting = 0;
       assign msu_track_missing = 0;
+      assign msu_stall = 0;
+      assign msu_seek_slowest = 0;
       assign msu_audio_size = 0;
       assign msu_audio_ack = 0;
       assign msu_audio_stop = 0;

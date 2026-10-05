@@ -61,8 +61,10 @@ default), two 32x32 squares are drawn near the top-left corner (`target/pocket/m
 | White | The ROM path has no terminator or is too long to extend |
 | Magenta | APF did not answer a command in time |
 
-Square 2 (x 72-103) is green, or orange once `stream_underrun` is set: the game read past
-`win_end`. It stays orange until the next boot.
+Square 2 (x 72-103) is orange once `stream_underrun` is set (the game read past `win_end`; it
+stays orange until the next boot). Otherwise it shows `seek_slowest`, the longest streaming seek
+since boot including any freeze: gray none yet, green under 10ms, yellow under 30ms, red 30ms or
+more.
 
 While streaming, a bar (y 72-79, x 32-95) shows `stream_fill`: the bytes between the reader and
 `win_end`, in 1/64ths of `STREAM_AHEAD`, sampled at each fetch decision.
@@ -117,6 +119,15 @@ streamed:
   the seek's page); `seek_region` tells the store which
   region the reader is now in. The game allows about 30ms per seek: it polls MSU_STATUS `$2000`
   times (`MSU1_SEEK_TIMEOUT` in its source).
+- **Freeze on a slow seek:** APF keeps its file fragment cache for the last-accessed slot only,
+  so a data read after a `.pcm` read walks the `.msu` cluster chain again; an open plus a read
+  takes ~30ms on hardware (measured by the openFPGA Mega CD core), and firmware events such as
+  plugging in USB power stop bridge service for hundreds of ms. Once a streaming seek has waited
+  `STALL_AFTER` (5ms), `msu_sdram_store` raises `stall`, which drives the SNES `enable` in
+  `main.v` low: CPU, PPU, SMP and DSP freeze together (the CPU keeps its own H/V counters, so it
+  cannot freeze alone), video output pauses, and MSU-1 audio and the fetch path keep running.
+  The game's poll loop does not run while frozen, so it never sees more than ~5ms. `STALL_MAX`
+  (1.5s) releases a seek that never completes.
 - **Reader position:** `msu_apf` polls it (`pos_req_toggle`) to decide on read-ahead. `MSU.sv`
   moves the address as soon as the game writes a seek, so the store flags positions taken
   during a seek (`pos_seeking`), and they are ignored.
