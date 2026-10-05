@@ -5,7 +5,7 @@ module msu_overlay (
     input wire clk,
     input wire de,
     input wire vsync,  // scanline_filler's one-cycle pulse
-    input wire [2:0] probe_status,
+    input wire [3:0] probe_status,
     input wire [3:0] tstate,
     input wire seen_busy,
     input wire seen_ok,
@@ -37,14 +37,17 @@ module msu_overlay (
   reg [23:0] msu_probe_rgb;
   always @(*) begin
     case (probe_status)
-      3'd0: msu_probe_rgb = 24'h404040;  // no probe yet
-      3'd1: msu_probe_rgb = 24'h00FF00;  // MSU-1 enabled
-      3'd2: msu_probe_rgb = 24'h0000FF;  // Get Filename failed
-      3'd3: msu_probe_rgb = 24'hFFFFFF;  // ROM path unusable (no terminator, too long)
-      3'd4: msu_probe_rgb = 24'hFF0000;  // <rom>.msu not found
-      3'd5: msu_probe_rgb = 24'hFFFF00;  // Open File failed otherwise
-      3'd6: msu_probe_rgb = 24'hFF00FF;  // APF did not answer
-      default: msu_probe_rgb = 24'hA0A0A0;  // probe in progress
+      4'd0: msu_probe_rgb = 24'h404040;  // no probe yet
+      4'd1: msu_probe_rgb = 24'h00FF00;  // MSU-1 enabled
+      4'd2: msu_probe_rgb = 24'h0000FF;  // Get Filename failed
+      4'd3: msu_probe_rgb = 24'hFFFFFF;  // ROM path unusable (no terminator, too long)
+      4'd4: msu_probe_rgb = 24'hFF0000;  // <rom>.msu not found
+      4'd5: msu_probe_rgb = 24'hFFFF00;  // Open File: malformed path
+      4'd6: msu_probe_rgb = 24'hFF00FF;  // APF did not answer
+      4'd7: msu_probe_rgb = 24'hA0A0A0;  // probe in progress
+      4'd8: msu_probe_rgb = 24'hFF8000;  // Open File: slot undefined
+      4'd9: msu_probe_rgb = 24'h00FFFF;  // Open File: general error
+      default: msu_probe_rgb = 24'hFF80C0;  // Open File: other result code
     endcase
   end
 

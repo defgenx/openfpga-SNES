@@ -27,6 +27,7 @@ module msu_apf #(
 
     input wire bridge_endian_little,
     input wire [31:0] bridge_addr,
+    input wire bridge_rd,
     input wire bridge_wr,
     input wire [31:0] bridge_wr_data,
     output reg [31:0] scratch_rd_data,
@@ -53,7 +54,7 @@ module msu_apf #(
     output reg msu_data_download = 0,  // .msu bytes are streaming into SDRAM
     output reg audio_download = 0,  // a .pcm sector is streaming into msu_audio
     // Boot probe result for the on-screen diagnostic, see docs/MSU-1.md
-    output reg [2:0] probe_status = 0,
+    output reg [3:0] probe_status = 0,
 
     // Track open: request toggle + number in, response toggle + file size out (0 = missing)
     input wire track_req_toggle,
@@ -101,8 +102,19 @@ module msu_apf #(
   reg [31:0] fsm_wdata;
   reg fsm_we = 0;
 
-  wire [6:0] scratch_addr = apf_owns_scratch ? bridge_addr[8:2] : fsm_addr;
-  wire scratch_we = apf_owns_scratch ? bridge_wr && bridge_addr[31:28] == SCRATCH_REGION : fsm_we;
+  // APF samples read data well after bridge_rd, by when bridge_addr has moved on: latch the
+  // read address at the strobe so the word stays put, as data_unloader.sv does
+  reg [6:0] bridge_rd_addr = 0;
+  reg prev_bridge_rd = 0;
+  always @(posedge clk_74a) begin
+    prev_bridge_rd <= bridge_rd;
+    if (bridge_rd && !prev_bridge_rd && bridge_addr[31:28] == SCRATCH_REGION) bridge_rd_addr <= bridge_addr[8:2];
+  end
+  wire bridge_scratch_wr = bridge_wr && bridge_addr[31:28] == SCRATCH_REGION;
+
+  wire [6:0] scratch_addr = !apf_owns_scratch ? fsm_addr
+      : bridge_scratch_wr ? bridge_addr[8:2] : bridge_rd_addr;
+  wire scratch_we = apf_owns_scratch ? bridge_scratch_wr : fsm_we;
   wire [31:0] scratch_wdata = apf_owns_scratch ? bridge_wr_data : fsm_wdata;
 
   always @(posedge clk_74a) begin
@@ -267,7 +279,7 @@ module msu_apf #(
           probe_pending <= 0;
           op <= OP_PROBE;
           probe_stage <= STAGE_GETFILE;
-          probe_status <= 3'd7;  // in progress
+          probe_status <= 4'd7;  // in progress
           cmd <= CMD_GETFILE;
           cmd_return <= S_GETFILE_DONE;
           state <= S_CMD;
@@ -439,12 +451,15 @@ module msu_apf #(
         if (op == OP_PROBE) begin
           // MiSTer enables MSU-1 whenever <rom>.msu exists, even an empty one
           msu_enable <= cmd_ok;
-          if (cmd_ok) probe_status <= 3'd1;
-          else if (cmd_timed_out) probe_status <= 3'd6;
-          else if (probe_stage == STAGE_GETFILE) probe_status <= 3'd2;
-          else if (probe_stage == STAGE_SCAN) probe_status <= 3'd3;
-          else if (cmd_err == 3'd3) probe_status <= 3'd4;
-          else probe_status <= 3'd5;
+          if (cmd_ok) probe_status <= 4'd1;
+          else if (cmd_timed_out) probe_status <= 4'd6;
+          else if (probe_stage == STAGE_GETFILE) probe_status <= 4'd2;
+          else if (probe_stage == STAGE_SCAN) probe_status <= 4'd3;
+          else if (cmd_err == 3'd3) probe_status <= 4'd4;  // not found
+          else if (cmd_err == 3'd4) probe_status <= 4'd5;  // malformed path
+          else if (cmd_err == 3'd2) probe_status <= 4'd8;  // slot undefined
+          else if (cmd_err == 3'd5) probe_status <= 4'd9;  // general error
+          else probe_status <= 4'd10;
           if (cmd_ok && slot_size != 0) begin
             read_offset <= 0;
             read_length <= slot_size > DATA_MAX_SIZE ? DATA_MAX_SIZE : slot_size;

@@ -40,6 +40,10 @@ falling back to `bridge_endian_little`.
 
 ### Probe diagnostic
 
+APF samples bridge read data long after `bridge_rd`, by when `bridge_addr` may have moved on,
+so the scratch RAM latches the read address at the strobe (as `data_unloader.sv` does). Before
+that, APF read a garbage path for Open File; test build 3 reported it in yellow.
+
 Test builds draw two 32x32 squares near the top-left corner for the whole session
 (`target/pocket/msu_overlay.sv`). Square 1 (x 32-63) shows the boot probe result:
 
@@ -49,7 +53,10 @@ Test builds draw two 32x32 squares near the top-left corner for the whole sessio
 | Light grey | Probe in progress (copying a large `.msu` file takes several seconds) |
 | Green | MSU-1 enabled (`<rom>.msu` opened). If the game still plays its original music, the ROM is not the MSU-1 patched one, or the `.pcm` names do not match |
 | Red | `<rom>.msu` not found: check that its name matches the ROM's |
-| Yellow | Open File failed with another error (e.g. malformed path) |
+| Yellow | Open File: malformed path |
+| Orange | Open File: slot undefined |
+| Cyan | Open File: general error |
+| Pink | Open File: another result code |
 | Blue | Get Filename on the cartridge slot failed |
 | White | The ROM path has no terminator or is too long to extend |
 | Magenta | APF did not answer a command in time |

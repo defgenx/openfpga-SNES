@@ -167,7 +167,7 @@ module tb_msu;
 
   reg ioctl_download = 0;
   wire msu_busy, msu_enable, msu_data_download, audio_download;
-  wire [2:0] probe_status;
+  wire [3:0] probe_status;
   wire track_req_toggle, track_resp_toggle, sector_req_toggle;
   wire [15:0] track_num;
   wire [31:0] track_size;
@@ -182,6 +182,7 @@ module tb_msu;
       .core_running(1'b1),
       .bridge_endian_little(LITTLE[0]),
       .bridge_addr(bridge_addr),
+      .bridge_rd(bridge_rd),
       .bridge_wr(bridge_wr),
       .bridge_wr_data(bridge_wr_data),
       .scratch_rd_data(scratch_rd_data),
@@ -426,14 +427,16 @@ module tb_msu;
     bw_raw(addr, LITTLE ? bswap(value) : value);
   endtask
 
+  // Like the real bridge: the address moves on after the strobe and the data is sampled
+  // later, so the core must hold the word it latched at bridge_rd
   task automatic br_raw(input [31:0] addr, output [31:0] raw);
     @(posedge clk_74a);
     bridge_addr <= addr;
     bridge_rd <= 1;
     @(posedge clk_74a);
     bridge_rd <= 0;
-    @(posedge clk_74a);
-    @(posedge clk_74a);
+    bridge_addr <= addr[31:28] == 4'hF ? addr : addr + 32'h40;
+    repeat (12) @(posedge clk_74a);
     raw = bridge_rd_data;
   endtask
 

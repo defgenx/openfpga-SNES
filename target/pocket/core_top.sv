@@ -668,7 +668,7 @@ module core_top (
   wire msu_enable;
   wire msu_data_download;
   wire msu_audio_download;
-  wire [2:0] msu_probe_status;
+  wire [3:0] msu_probe_status;
 
   wire msu_track_req_toggle;
   wire [15:0] msu_track_req_num;
@@ -685,6 +685,7 @@ module core_top (
 
       .bridge_endian_little(bridge_endian_little),
       .bridge_addr(bridge_addr),
+      .bridge_rd(bridge_rd),
       .bridge_wr(bridge_wr),
       .bridge_wr_data(bridge_wr_data),
       .scratch_rd_data(msu_scratch_rd_data),
@@ -1121,12 +1122,12 @@ module core_top (
   wire cmd_dbg_seen_busy;
   wire cmd_dbg_seen_ok;
 
-  wire [2:0] msu_probe_status_s;
+  wire [3:0] msu_probe_status_s;
   wire [3:0] cmd_dbg_tstate_s;
   wire cmd_dbg_seen_busy_s;
   wire cmd_dbg_seen_ok_s;
   synch_3 #(
-      .WIDTH(9)
+      .WIDTH(10)
   ) msu_dbg_sync (
       {msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
       {msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},

@@ -42,7 +42,7 @@ module tb_overlay;
       .clk(clk),
       .de(de_out),
       .vsync(vs),
-      .probe_status(3'd4),
+      .probe_status(4'd4),
       .tstate(4'd0),
       .seen_busy(1'b0),
       .seen_ok(1'b1),
