@@ -8,10 +8,12 @@ SRCS := stubs.v tb_msu.sv \
 	$(ROOT)/rtl/upstream/chip/MSU1/msu_audio.v \
 	$(ROOT)/rtl/upstream/chip/MSU1/msu_fifo.v
 
-CASES := le_msu be_msu le_nomsu
+CASES := le_msu be_msu le_nomsu le_swap be_swap
 le_msu_P   := -GLITTLE=1 -GHAVE_MSU=1
 be_msu_P   := -GLITTLE=0 -GHAVE_MSU=1
 le_nomsu_P := -GLITTLE=1 -GHAVE_MSU=0
+le_swap_P  := -GLITTLE=1 -GHAVE_MSU=1 -GSTRUCT_SWAP=1
+be_swap_P  := -GLITTLE=0 -GHAVE_MSU=1 -GSTRUCT_SWAP=1
 
 # Upstream and Analogue sources rely on Quartus leniency (use before declaration,
 # procedural assignment to output wires), hence Verilator and these waivers.

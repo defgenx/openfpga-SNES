@@ -8,6 +8,8 @@
 module tb_msu;
   parameter LITTLE = 1;
   parameter HAVE_MSU = 1;
+  // APF writes the filename struct in the opposite byte order to file data
+  parameter STRUCT_SWAP = 0;
 
   // ROM path chosen to exercise dots in directory names and in the file name
   localparam string ROM_PATH = "/Assets/snes/common/msu.packs/Game.v1.sfc";
@@ -88,6 +90,11 @@ module tb_msu;
     return LITTLE ? {b3, b2, b1, b0} : {b0, b1, b2, b3};
   endfunction
 
+  localparam STRUCT_LITTLE = LITTLE ^ STRUCT_SWAP;
+  function automatic [31:0] pack_struct(input [7:0] b0, input [7:0] b1, input [7:0] b2, input [7:0] b3);
+    return STRUCT_LITTLE ? {b3, b2, b1, b0} : {b0, b1, b2, b3};
+  endfunction
+
   ////////////////////////////////////////////////////////////////////////////
   // Bridge and core_bridge_cmd
 
@@ -160,6 +167,7 @@ module tb_msu;
 
   reg ioctl_download = 0;
   wire msu_busy, msu_enable, msu_data_download, audio_download;
+  wire [2:0] probe_status;
   wire track_req_toggle, track_resp_toggle, sector_req_toggle;
   wire [15:0] track_num;
   wire [31:0] track_size;
@@ -193,6 +201,7 @@ module tb_msu;
       .msu_enable(msu_enable),
       .msu_data_download(msu_data_download),
       .audio_download(audio_download),
+      .probe_status(probe_status),
       .track_req_toggle(track_req_toggle),
       .track_num(track_num),
       .track_resp_toggle(track_resp_toggle),
@@ -459,7 +468,7 @@ module tb_msu;
       b[1] = i + 1 < path.len() ? path[i+1] : 0;
       b[2] = i + 2 < path.len() ? path[i+2] : 0;
       b[3] = i + 3 < path.len() ? path[i+3] : 0;
-      bw_raw(ptr + i, pack(b[0], b[1], b[2], b[3]));
+      bw_raw(ptr + i, pack_struct(b[0], b[1], b[2], b[3]));
     end
   endtask
 
@@ -473,7 +482,7 @@ module tb_msu;
     done = 0;
     for (i = 0; i < 256 && !done; i = i + 1) begin
       if (i % 4 == 0) br_raw(ptr + i, raw);
-      c = LITTLE ? raw[8*(i%4)+:8] : raw[8*(3-i%4)+:8];
+      c = STRUCT_LITTLE ? raw[8*(i%4)+:8] : raw[8*(3-i%4)+:8];
       if (c == 0) done = 1;
       else path = {path, string'(c)};
     end
@@ -643,7 +652,11 @@ module tb_msu;
 
     wait (msu_busy);
     wait (!msu_busy);
-    $display("[%0t] probe done: msu_enable=%0d", $time, msu_enable);
+    $display("[%0t] probe done: msu_enable=%0d status=%0d", $time, msu_enable, probe_status);
+    if (probe_status != (HAVE_MSU ? 1 : 4)) begin
+      $display("FAIL: probe_status %0d", probe_status);
+      errors = errors + 1;
+    end
 
     if (!HAVE_MSU) begin
       if (msu_enable) begin

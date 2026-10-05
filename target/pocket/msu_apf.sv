@@ -51,6 +51,8 @@ module msu_apf #(
     output reg msu_enable = 0,  // a <rom>.msu file exists
     output reg msu_data_download = 0,  // .msu bytes are streaming into SDRAM
     output reg audio_download = 0,  // a .pcm sector is streaming into msu_audio
+    // Boot probe result for the on-screen diagnostic, see docs/MSU-1.md
+    output reg [2:0] probe_status = 0,
 
     // Track open: request toggle + number in, response toggle + file size out (0 = missing)
     input wire track_req_toggle,
@@ -81,6 +83,8 @@ module msu_apf #(
   localparam S_CMD = 17;
   localparam S_CMD_WAIT_LOW = 18;
   localparam S_CMD_WAIT_HIGH = 19;
+  localparam S_DETECT_WAIT = 20;
+  localparam S_DETECT = 21;
 
   reg [4:0] state = S_IDLE;
   reg [4:0] cmd_return;
@@ -111,6 +115,8 @@ module msu_apf #(
   // same way data_loader.sv unpacks file bytes.
   reg [2:0] endian_s = 0;
   wire little = endian_s[2];
+  // Byte order of the filename struct, taken from where its leading '/' lands
+  reg struct_little = 0;
 
   function automatic [4:0] lane_shift(input [1:0] i, input little_endian);
     lane_shift = {little_endian ? i : 2'd3 - i, 3'b000};
@@ -152,6 +158,10 @@ module msu_apf #(
 
   reg prev_download = 0;
   reg probe_pending = 0;
+  localparam STAGE_GETFILE = 0;
+  localparam STAGE_SCAN = 1;
+  localparam STAGE_OPEN = 2;
+  reg [1:0] probe_stage = STAGE_GETFILE;
   reg [QUIET_BITS-1:0] quiet = 0;
 
   reg [7:0] idx;  // byte index into the path
@@ -215,7 +225,7 @@ module msu_apf #(
   assign target_dataslot_slotoffset = read_offset;
   assign target_dataslot_bridgeaddr = op == OP_PROBE ? DATA_BRIDGE_ADDR : AUDIO_BRIDGE_ADDR;
   assign target_dataslot_length = read_length;
-  wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], little)+:8];
+  wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], struct_little)+:8];
   wire [31:0] sector_offset = {sector_num, 10'b0};
   // Full sectors, then the remainder, then nothing past the end
   wire [21:0] last_sector = track_size[31:10];
@@ -243,6 +253,7 @@ module msu_apf #(
       probe_pending <= 1;
       msu_busy <= 1;
       msu_enable <= 0;
+      probe_status <= 0;
     end
 
     if (ioctl_download) quiet <= 0;
@@ -253,6 +264,7 @@ module msu_apf #(
         if (probe_pending && &quiet && core_running) begin
           probe_pending <= 0;
           op <= OP_PROBE;
+          probe_stage <= STAGE_GETFILE;
           cmd <= CMD_GETFILE;
           cmd_return <= S_GETFILE_DONE;
           state <= S_CMD;
@@ -284,11 +296,21 @@ module msu_apf #(
         if (!cmd_ok) begin
           state <= S_AFTER_OPEN;
         end else begin
-          idx <= 0;
-          have_dot <= 0;
+          probe_stage <= STAGE_SCAN;
           fsm_addr <= 0;
-          state <= S_SCAN_WAIT;
+          state <= S_DETECT_WAIT;
         end
+      end
+
+      S_DETECT_WAIT: state <= S_DETECT;
+
+      S_DETECT: begin
+        if (fsm_q[31:24] == "/") struct_little <= 0;
+        else if (fsm_q[7:0] == "/") struct_little <= 1;
+        else struct_little <= little;
+        idx <= 0;
+        have_dot <= 0;
+        state <= S_SCAN_WAIT;
       end
 
       S_SCAN_WAIT: state <= S_SCAN;
@@ -350,7 +372,7 @@ module msu_apf #(
 
       S_SUFFIX_WR: begin
         fsm_wdata <= fsm_q;
-        fsm_wdata[lane_shift(idx[1:0], little)+:8] <= suffix_char;
+        fsm_wdata[lane_shift(idx[1:0], struct_little)+:8] <= suffix_char;
         fsm_we <= 1;
         if (suffix_idx == suffix_len - 1'd1) begin
           idx <= 0;
@@ -370,6 +392,7 @@ module msu_apf #(
         if (idx == 0) idx <= 1;
         else begin
           cmd <= CMD_OPENFILE;
+          if (op == OP_PROBE) probe_stage <= STAGE_OPEN;
           cmd_return <= S_OPEN_DONE;
           state <= S_CMD;
         end
@@ -413,6 +436,12 @@ module msu_apf #(
         if (op == OP_PROBE) begin
           // MiSTer enables MSU-1 whenever <rom>.msu exists, even an empty one
           msu_enable <= cmd_ok;
+          if (cmd_ok) probe_status <= 3'd1;
+          else if (cmd_timed_out) probe_status <= 3'd6;
+          else if (probe_stage == STAGE_GETFILE) probe_status <= 3'd2;
+          else if (probe_stage == STAGE_SCAN) probe_status <= 3'd3;
+          else if (cmd_err == 3'd3) probe_status <= 3'd4;
+          else probe_status <= 3'd5;
           if (cmd_ok && slot_size != 0) begin
             read_offset <= 0;
             read_length <= slot_size > DATA_MAX_SIZE ? DATA_MAX_SIZE : slot_size;

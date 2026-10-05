@@ -34,6 +34,22 @@ chip32 loader has been quiet for ~14ms and the core is running:
 If any command goes unanswered for ~0.9s during this probe, MSU-1 stays off and the game boots
 normally.
 
+The filename struct's byte order is taken from where the path's leading `/` lands in word 0,
+falling back to `bridge_endian_little`.
+
+### Probe diagnostic
+
+For ~10s after each boot, a 16x16 square in the top-left corner shows the probe result:
+
+| Colour | Result |
+|---|---|
+| Green | MSU-1 enabled (`<rom>.msu` opened) |
+| Red | `<rom>.msu` not found: check that its name matches the ROM's |
+| Yellow | Open File failed with another error (e.g. malformed path) |
+| Blue | Get Filename on the cartridge slot failed |
+| White | The ROM path has no terminator or is too long to extend |
+| Magenta | APF did not answer a command within ~0.9s |
+
 Track requests (`$2004/$2005`) rewrite the suffix as `-<n>.pcm` and Open File it into slot 21. A
 size of 0 reports the track as missing. Each audio sector request is a Data Slot Read of 1024 bytes
 at `sector * 1024`, clamped to the end of the file, delivered to `0x4800_0000`. Only slot 21

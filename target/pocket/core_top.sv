@@ -664,6 +664,7 @@ module core_top (
   wire msu_enable;
   wire msu_data_download;
   wire msu_audio_download;
+  wire [2:0] msu_probe_status;
 
   wire msu_track_req_toggle;
   wire [15:0] msu_track_req_num;
@@ -702,6 +703,7 @@ module core_top (
       .msu_enable(msu_enable),
       .msu_data_download(msu_data_download),
       .audio_download(msu_audio_download),
+      .probe_status(msu_probe_status),
 
       .track_req_toggle(msu_track_req_toggle),
       .track_num(msu_track_req_num),
@@ -1105,8 +1107,52 @@ module core_top (
       rgb <= {9'b0, ~latched_snap_index[0], use_square_pixels_s, 10'b0, 3'b0};
     end else if (de_out) begin
       de  <= 1;
-      rgb <= rgb_out;
+      rgb <= msu_overlay_on ? msu_overlay_rgb : rgb_out;
     end
+  end
+
+  // MSU-1 probe diagnostic: a 16x16 square in the top-left corner for ~10s after each boot.
+  // Colours are listed in docs/MSU-1.md.
+  wire [2:0] msu_probe_status_s;
+  synch_3 #(
+      .WIDTH(3)
+  ) msu_probe_status_sync (
+      msu_probe_status,
+      msu_probe_status_s,
+      clk_video_5_37
+  );
+
+  reg [8:0] msu_overlay_x = 0;
+  reg [8:0] msu_overlay_y = 0;
+  reg [9:0] msu_overlay_frames = 0;
+  reg [2:0] msu_overlay_prev = 0;
+
+  always @(posedge clk_video_5_37) begin
+    if (de_out) msu_overlay_x <= msu_overlay_x + 1'd1;
+    else msu_overlay_x <= 0;
+    if (~de_out && prev_de) msu_overlay_y <= msu_overlay_y + 1'd1;
+
+    if (video_vs && ~prev_vs) begin
+      msu_overlay_y <= 0;
+      if (msu_overlay_frames != 0) msu_overlay_frames <= msu_overlay_frames - 1'd1;
+    end
+
+    msu_overlay_prev <= msu_probe_status_s;
+    if (msu_probe_status_s != msu_overlay_prev && msu_probe_status_s != 0) msu_overlay_frames <= 10'd600;
+  end
+
+  wire msu_overlay_on = msu_overlay_frames != 0 && msu_overlay_x < 16 && msu_overlay_y < 16;
+  reg [23:0] msu_overlay_rgb;
+  always @(*) begin
+    case (msu_overlay_prev)
+      3'd1: msu_overlay_rgb = 24'h00FF00;  // MSU-1 enabled
+      3'd2: msu_overlay_rgb = 24'h0000FF;  // Get Filename failed
+      3'd3: msu_overlay_rgb = 24'hFFFFFF;  // ROM path unusable (no terminator, too long)
+      3'd4: msu_overlay_rgb = 24'hFF0000;  // <rom>.msu not found
+      3'd5: msu_overlay_rgb = 24'hFFFF00;  // Open File failed otherwise
+      3'd6: msu_overlay_rgb = 24'hFF00FF;  // APF did not answer
+      default: msu_overlay_rgb = 24'h000000;
+    endcase
   end
 
   sound_i2s #(
