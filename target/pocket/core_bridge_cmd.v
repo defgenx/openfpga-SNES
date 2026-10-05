@@ -92,6 +92,11 @@ input   wire    [31:0]  target_buffer_param_struct, // bus address of the memory
 input   wire    [31:0]  target_buffer_resp_struct,  // bus address of the memory region APF will write its response struct to
                                                     // this should be mapped by the developer, the buffer is not implemented in this file
 
+// MSU-1 diagnostic (docs/MSU-1.md): target state and whether APF answered the last command
+output  wire    [3:0]   dbg_tstate,
+output  reg             dbg_seen_busy = 0,
+output  reg             dbg_seen_ok = 0,
+
 input   wire    [9:0]   datatable_addr,
 input   wire            datatable_wren,
 input   wire    [31:0]  datatable_data,
@@ -526,6 +531,8 @@ always @(posedge clk) begin
     end
     TARG_ST_DATASLOTOP: begin
         target_0[31:16] <= 16'h636D;
+        dbg_seen_busy <= 0;
+        dbg_seen_ok <= 0;
 
         target_dataslot_done <= 0;
         target_dataslot_err <= 0;
@@ -534,8 +541,10 @@ always @(posedge clk) begin
     TARG_ST_WAITRESULT_DSO: begin
         if(target_0[31:16] == 16'h6275) begin
             target_dataslot_ack <= 1;
+            dbg_seen_busy <= 1;
         end
         if(target_0[31:16] == 16'h6F6B) begin
+            dbg_seen_ok <= 1;
             // done
             // save result code
             target_dataslot_err <= target_0[2:0];
@@ -555,6 +564,8 @@ always @(posedge clk) begin
 
 
 end
+
+    assign dbg_tstate = tstate;
 
     wire    [31:0]  b_datatable_q;
     reg     [9:0]   b_datatable_addr;

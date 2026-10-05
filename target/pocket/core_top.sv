@@ -512,6 +512,10 @@ module core_top (
       .target_dataslot_bridgeaddr(msu_target_bridgeaddr),
       .target_dataslot_length(msu_target_length),
 
+      .dbg_tstate(cmd_dbg_tstate),
+      .dbg_seen_busy(cmd_dbg_seen_busy),
+      .dbg_seen_ok(cmd_dbg_seen_ok),
+
       .target_buffer_param_struct(32'h3000_0000),
       .target_buffer_resp_struct(32'h3000_0000),
 
@@ -1111,49 +1115,39 @@ module core_top (
     end
   end
 
-  // MSU-1 probe diagnostic (test builds): a 16x16 square in the top-left corner for ~10s after boot.
-  // Colours are listed in docs/MSU-1.md.
+  // MSU-1 diagnostic (test builds), colours in docs/MSU-1.md. Two 32x32 squares, always drawn:
+  // x 32-63 the probe result, x 72-103 the APF target command handshake.
+  wire [3:0] cmd_dbg_tstate;
+  wire cmd_dbg_seen_busy;
+  wire cmd_dbg_seen_ok;
+
   wire [2:0] msu_probe_status_s;
+  wire [3:0] cmd_dbg_tstate_s;
+  wire cmd_dbg_seen_busy_s;
+  wire cmd_dbg_seen_ok_s;
   synch_3 #(
-      .WIDTH(3)
-  ) msu_probe_status_sync (
-      msu_probe_status,
-      msu_probe_status_s,
+      .WIDTH(9)
+  ) msu_dbg_sync (
+      {msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
+      {msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
       clk_video_5_37
   );
 
-  reg [8:0] msu_overlay_x = 0;
-  reg [8:0] msu_overlay_y = 0;
-  reg [9:0] msu_overlay_frames = 0;
-  reg [2:0] msu_overlay_prev = 0;
+  wire msu_overlay_on;
+  wire [23:0] msu_overlay_rgb;
 
-  always @(posedge clk_video_5_37) begin
-    if (de_out) msu_overlay_x <= msu_overlay_x + 1'd1;
-    else msu_overlay_x <= 0;
-    if (~de_out && prev_de) msu_overlay_y <= msu_overlay_y + 1'd1;
+  msu_overlay msu_overlay (
+      .clk(clk_video_5_37),
+      .de(de_out),
+      .vsync(video_vs),
+      .probe_status(msu_probe_status_s),
+      .tstate(cmd_dbg_tstate_s),
+      .seen_busy(cmd_dbg_seen_busy_s),
+      .seen_ok(cmd_dbg_seen_ok_s),
+      .on(msu_overlay_on),
+      .rgb(msu_overlay_rgb)
+  );
 
-    if (video_vs && ~prev_vs) begin
-      msu_overlay_y <= 0;
-      if (msu_overlay_frames != 0) msu_overlay_frames <= msu_overlay_frames - 1'd1;
-    end
-
-    msu_overlay_prev <= msu_probe_status_s;
-    if (msu_probe_status_s != msu_overlay_prev && msu_probe_status_s != 0) msu_overlay_frames <= 10'd600;
-  end
-
-  wire msu_overlay_on = msu_overlay_frames != 0 && msu_overlay_x < 16 && msu_overlay_y < 16;
-  reg [23:0] msu_overlay_rgb;
-  always @(*) begin
-    case (msu_overlay_prev)
-      3'd1: msu_overlay_rgb = 24'h00FF00;  // MSU-1 enabled
-      3'd2: msu_overlay_rgb = 24'h0000FF;  // Get Filename failed
-      3'd3: msu_overlay_rgb = 24'hFFFFFF;  // ROM path unusable (no terminator, too long)
-      3'd4: msu_overlay_rgb = 24'hFF0000;  // <rom>.msu not found
-      3'd5: msu_overlay_rgb = 24'hFFFF00;  // Open File failed otherwise
-      3'd6: msu_overlay_rgb = 24'hFF00FF;  // APF did not answer
-      default: msu_overlay_rgb = 24'h000000;
-    endcase
-  end
 
   sound_i2s #(
       .CHANNEL_WIDTH(16),

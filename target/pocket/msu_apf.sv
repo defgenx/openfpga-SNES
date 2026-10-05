@@ -267,6 +267,7 @@ module msu_apf #(
           probe_pending <= 0;
           op <= OP_PROBE;
           probe_stage <= STAGE_GETFILE;
+          probe_status <= 3'd7;  // in progress
           cmd <= CMD_GETFILE;
           cmd_return <= S_GETFILE_DONE;
           state <= S_CMD;

@@ -39,43 +39,31 @@ falling back to `bridge_endian_little`.
 
 ### Probe diagnostic
 
-For ~10s after each boot, a 16x16 square in the top-left corner shows the probe result. This is
-a test-build aid: a ROM without a pack shows red.
+Test builds draw two 32x32 squares near the top-left corner for the whole session
+(`target/pocket/msu_overlay.sv`). Square 1 (x 32-63) shows the boot probe result:
 
 | Colour | Result |
 |---|---|
+| Dark grey | No probe has run yet |
+| Light grey | Probe in progress (copying a large `.msu` file takes several seconds) |
 | Green | MSU-1 enabled (`<rom>.msu` opened). If the game still plays its original music, the ROM is not the MSU-1 patched one, or the `.pcm` names do not match |
 | Red | `<rom>.msu` not found: check that its name matches the ROM's |
 | Yellow | Open File failed with another error (e.g. malformed path) |
 | Blue | Get Filename on the cartridge slot failed |
 | White | The ROM path has no terminator or is too long to extend |
-| Magenta | APF did not answer a command within ~0.9s |
+| Magenta | APF did not answer a command in time |
 
-Track requests (`$2004/$2005`) rewrite the suffix as `-<n>.pcm` and Open File it into slot 21. A
-size of 0 reports the track as missing. Each audio sector request is a Data Slot Read of 1024 bytes
-at `sector * 1024`, clamped to the end of the file, delivered to `0x4800_0000`. Only slot 21
-is read while a game plays, so APF's per-slot cluster cache stays warm.
+Square 2 (x 72-103) shows `core_bridge_cmd`'s target command handshake:
 
-Slots 20 and 21 are declared in `data.json` as `deferload`, read-only and not user-selectable;
-APF requires every slot the core opens to be declared.
-
-## Bridge map
-
-| Region | Use |
+| Colour | State |
 |---|---|
-| `0x3000_0000` | Filename struct for Get/Open File (path at `0x0`, flags at `0x100`, size at `0x104`) — `msu_apf` scratch RAM |
-| `0x4000_0000` + offset | `.msu` contents → `data_loader` → `msu_sdram_store` → SDRAM |
-| `0x4800_0000` | `.pcm` sector → the same `data_loader` → `msu_audio` (the `ioctl` stream on MiSTer) |
+| Magenta | Waiting for APF to acknowledge Ready to Run (0x0140) |
+| Red | A command is posted and APF has not picked it up |
+| Yellow | APF reported busy and has not finished |
+| Green | Idle, the last command was answered |
+| Blue | Idle, no command answered yet |
 
-Region `0x4` goes through `msu_bridge_rx` (in `msu_apf.sv`), not `data_loader`. It hands each
-32-bit word to `clk_sys` with a toggle handshake instead of a dual-clock FIFO. Bit 27 of the
-address picks the destination; the 16MB data cap keeps data offsets below bit 27. This relies on
-APF's ~75 `clk_74a` cycles between bridge writes, the same assumption `data_loader` makes.
-`msu_sdram_store` must finish the word's two SNI writes before the next one arrives. If it does
-not, it sets `load_overflow`, which nothing reads on hardware; the sim fails on it.
-
-`core_top.sv` gives the data slot table's port A to `msu_apf` while `dt_active` is set; the rest
-of the time, that port reports the save size.
+`sim/overlay/tb_overlay.sv` checks the squares' placement behind `scanline_filler`.
 
 ## CPU turbo
 

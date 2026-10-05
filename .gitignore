@@ -80,3 +80,5 @@ sim/msu/build/
 sim/msu/*.vcd
 build/
 release/
+sim/overlay/build/
+sim/overlay/build.log
