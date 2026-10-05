@@ -92,11 +92,9 @@ if { [lindex $argv 0] == "ntsc" } {
 
 if { [lsearch -exact $options "fast"] >= 0 } {
   puts "Fast build: no timing analysis"
-  # execute_module skips the project's PRE_FLOW_SCRIPT_FILE, which writes build_id.mif
-  set here [pwd]
-  cd projects
+  # execute_module skips the project's PRE_FLOW_SCRIPT_FILE, which writes build_id.mif;
+  # project_open has already made projects/ the working directory
   source ../platform/pocket/build_id_gen.tcl
-  cd $here
   execute_module -tool map
   execute_module -tool fit
   execute_module -tool asm
