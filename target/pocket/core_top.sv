@@ -386,6 +386,9 @@ module core_top (
         32'h204: begin
           blend_enabled <= bridge_wr_data[0];
         end
+        32'h300: begin
+          msu_debug_squares <= bridge_wr_data[0];
+        end
       endcase
     end
   end
@@ -811,6 +814,7 @@ module core_top (
   reg mouse_enabled;
 
   reg use_square_pixels = 0;
+  reg msu_debug_squares = 0;
   reg blend_enabled = 0;
 
   // Settings sync
@@ -1112,11 +1116,12 @@ module core_top (
       rgb <= {9'b0, ~latched_snap_index[0], use_square_pixels_s, 10'b0, 3'b0};
     end else if (de_out) begin
       de  <= 1;
-      rgb <= msu_overlay_on ? msu_overlay_rgb : rgb_out;
+      rgb <= msu_debug_squares_s && msu_overlay_on ? msu_overlay_rgb : rgb_out;
     end
   end
 
-  // MSU-1 diagnostic (test builds), colours in docs/MSU-1.md. Two 32x32 squares, always drawn:
+  // MSU-1 diagnostic, colours in docs/MSU-1.md. Two 32x32 squares, drawn while the
+  // "MSU-1 Debug Squares" setting (0x300) is on:
   // x 32-63 the probe result, x 72-103 the APF target command handshake.
   wire [3:0] cmd_dbg_tstate;
   wire cmd_dbg_seen_busy;
@@ -1126,11 +1131,12 @@ module core_top (
   wire [3:0] cmd_dbg_tstate_s;
   wire cmd_dbg_seen_busy_s;
   wire cmd_dbg_seen_ok_s;
+  wire msu_debug_squares_s;
   synch_3 #(
-      .WIDTH(10)
+      .WIDTH(11)
   ) msu_dbg_sync (
-      {msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
-      {msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
+      {msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
+      {msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
       clk_video_5_37
   );
 

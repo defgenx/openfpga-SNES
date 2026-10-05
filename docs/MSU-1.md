@@ -44,8 +44,8 @@ APF samples bridge read data long after `bridge_rd`, by when `bridge_addr` may h
 so the scratch RAM latches the read address at the strobe (as `data_unloader.sv` does). Before
 that, APF read a garbage path for Open File; test build 3 reported it in yellow.
 
-Test builds draw two 32x32 squares near the top-left corner for the whole session
-(`target/pocket/msu_overlay.sv`). Square 1 (x 32-63) shows the boot probe result:
+With the **MSU-1 Debug Squares** setting on (`interact.json` id 50, bridge `0x300`, off by
+default), two 32x32 squares are drawn near the top-left corner (`target/pocket/msu_overlay.sv`). Square 1 (x 32-63) shows the boot probe result:
 
 | Colour | Result |
 |---|---|

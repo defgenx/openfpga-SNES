@@ -66,7 +66,7 @@ MSU-1 is enabled when `<rom>.msu` exists. The data file is copied to memory at b
 
 ##### Troubleshooting MSU-1
 
-Test builds draw two small squares near the top-left corner of the picture. They stay on for the whole session.
+Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small squares near the top-left corner of the picture. They are off by default, and stay on while the setting is on.
 
 **Left square: MSU-1 detection at boot**
 
@@ -95,6 +95,12 @@ Test builds draw two small squares near the top-left corner of the picture. They
 | Magenta | The Pocket never acknowledged the core at startup |
 
 CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.
+
+FMV games such as Super Road Blaster keep their video in the `.msu` data file, which is far bigger than the 16MB the core can load. Frames past that point are garbage, and the game reports them, e.g. `video-frame FE01 of chapter B479 is bad`. Audio packs are not affected.
+
+##### Building the MSU-1 core on Windows
+
+Install [Quartus Prime Lite 21.1](https://www.intel.com/content/www/us/en/software-kit/684215/intel-quartus-prime-lite-edition-design-software-version-21-1-for-windows.html) with Cyclone V support, clone this branch, then double-click `tools\build-windows.bat`. It compiles the NTSC, PAL and SPC7110/S-DD1/BSX bitstreams, writes `release\defgenx.SNESMSU.zip`, and runs the installer. From PowerShell, `tools\build-windows.ps1 -Variants ntsc` builds one bitstream only, and `-PackageOnly` repackages the last build.
 
 #### BSX
 
