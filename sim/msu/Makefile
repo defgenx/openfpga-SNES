@@ -8,7 +8,7 @@ SRCS := stubs.v tb_msu.sv \
 	$(ROOT)/rtl/upstream/chip/MSU1/msu_audio.v \
 	$(ROOT)/rtl/upstream/chip/MSU1/msu_fifo.v
 
-CASES := le_msu be_msu le_nomsu le_swap be_swap le_stream be_stream srb
+CASES := le_msu be_msu le_nomsu le_swap be_swap le_stream be_stream srb z3r video video_fast
 le_msu_P   := -GLITTLE=1 -GHAVE_MSU=1
 be_msu_P   := -GLITTLE=0 -GHAVE_MSU=1
 le_nomsu_P := -GLITTLE=1 -GHAVE_MSU=0
@@ -16,7 +16,10 @@ le_swap_P  := -GLITTLE=1 -GHAVE_MSU=1 -GSTRUCT_SWAP=1
 be_swap_P  := -GLITTLE=0 -GHAVE_MSU=1 -GSTRUCT_SWAP=1
 le_stream_P := -GLITTLE=1 -GHAVE_MSU=1 -GSTREAM=1
 be_stream_P := -GLITTLE=0 -GHAVE_MSU=1 -GSTREAM=1
-srb_P       := -GLITTLE=0 -GHAVE_MSU=1 -GSTREAM=1 -GSRB=1 -DSRB_SIM
+srb_P       := -GLITTLE=0 -GHAVE_MSU=1 -GSTREAM=1 -GSRB=1 -DREAL_SIM
+z3r_P       := -GLITTLE=0 -GHAVE_MSU=1 -GZ3R=1 -DREAL_SIM
+video_P     := -GLITTLE=0 -GHAVE_MSU=1 -GSTREAM=1 -GVIDEO=1 -GVIDEO_KB=6 -DREAL_SIM
+video_fast_P := -GLITTLE=0 -GHAVE_MSU=1 -GSTREAM=1 -GVIDEO=1 -GVIDEO_KB=12 -DREAL_SIM
 
 # Upstream and Analogue sources rely on Quartus leniency (use before declaration,
 # procedural assignment to output wires), hence Verilator and these waivers.
@@ -27,7 +30,7 @@ VFLAGS := --binary --timing -j 0 --top-module tb_msu -Wno-fatal -Wno-PROCASSWIRE
 all: $(CASES)
 
 $(CASES): %: build/%/Vtb_msu
-	$< | tee build/$@.log | grep -E "PASS|FAIL|checked|played|looped|probe|streamed|SRB"
+	$< | tee build/$@.log | grep -E "PASS|FAIL|checked|played|looped|probe|streamed|SRB|z3r|video"
 	@grep -q "^PASS" build/$@.log
 
 build/%/Vtb_msu: $(SRCS) | build

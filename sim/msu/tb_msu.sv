@@ -16,16 +16,28 @@ module tb_msu;
   // playing at its real rate, and APF costs: a fixed latency per read plus a penalty when the
   // slot changes (APF drops its cluster-chain cache then; see docs/MSU-1.md)
   parameter SRB = 0;
+  // ALttP randomizer (z3randomizer msu.asm) audio pack: empty .msu, pack detection, a 64-track
+  // fallback scan, resume, fades
+  parameter Z3R = 0;
+  // MSU-1 video player: one seek, then VIDEO_KB read in each vertical blank at 60Hz with music.
+  // A SNES moves ~6KB to VRAM per vblank, so players read a few KB per frame
+  parameter VIDEO = 0;
+  parameter VIDEO_KB = 6;
   parameter CMD_US = 300;
+  parameter OPEN_US = 5000;  // APF Open File, unknown on hardware
   parameter SWITCH_US = 3000;
+  localparam REAL = SRB || Z3R || VIDEO;  // charge APF costs and play music at its real rate
   localparam SEEK_BUDGET_US = 30000;  // the game polls MSU_STATUS $2000 times, ~34ms
-  localparam RING_BITS = SRB ? 17 : 13;
+  localparam RING_BITS = SRB || VIDEO ? 17 : 13;
 
   // ROM path chosen to exercise dots in directory names and in the file name
   localparam string ROM_PATH = "/Assets/snes/common/msu.packs/Game.v1.sfc";
   localparam string BASE = "/Assets/snes/common/msu.packs/Game.v1";
 
-  localparam integer MSU_SIZE = SRB ? 300000 : STREAM ? 40000 : 3001;
+  localparam integer MSU_SIZE = Z3R ? 0 : VIDEO ? 700000 : SRB ? 300000 : STREAM ? 40000 : 3001;
+  localparam integer T2_SAMPLES = 3000;  // tracks under 2KB hit an upstream msu_audio quirk (docs/MSU-1.md)
+  localparam integer T34_SAMPLES = 3000;
+  localparam integer T34_LOOP = 500;
   localparam integer T1_SAMPLES = 700;  // 2 full sectors + a partial one
   localparam integer T12_SAMPLES = 900;  // upstream drops a partial sector right after sector 0
   localparam integer T12_LOOP = 300;
@@ -63,6 +75,8 @@ module tb_msu;
     if (path == {BASE, ".msu"}) return 1;
     if (path == {BASE, "-1.pcm"}) return 2;
     if (path == {BASE, "-12.pcm"}) return 3;
+    if (Z3R && path == {BASE, "-2.pcm"}) return 4;
+    if (Z3R && path == {BASE, "-34.pcm"}) return 5;
     return 0;
   endfunction
 
@@ -71,6 +85,8 @@ module tb_msu;
       1: return MSU_SIZE;
       2: return 8 + 4 * T1_SAMPLES;
       3: return 8 + 4 * T12_SAMPLES;
+      4: return 8 + 4 * T2_SAMPLES;
+      5: return 8 + 4 * T34_SAMPLES;
       9: return 32'h80000;
       default: return 0;
     endcase
@@ -78,8 +94,8 @@ module tb_msu;
 
   function automatic [7:0] file_byte(input integer id, input integer off);
     integer loop;
-    loop = id == 3 ? T12_LOOP : 0;
-    if ((id == 2 || id == 3) && off < 8) begin
+    loop = id == 3 ? T12_LOOP : id == 5 ? T34_LOOP : 0;
+    if (id >= 2 && id <= 5 && off < 8) begin
       case (off)
         0: return "M";
         1: return "S";
@@ -193,10 +209,10 @@ module tb_msu;
       .TIMEOUT_BITS(26),
       .RING_BITS(RING_BITS),
       .DATA_MAX_SIZE(4096),
-      .STREAM_CHUNK(SRB ? 8192 : 512),
-      .STREAM_LEAD(SRB ? 4096 : 1024),
-      .STREAM_GUARD(SRB ? 8192 : 1024),
-      .STREAM_AHEAD(SRB ? 16384 : 2048)
+      .STREAM_CHUNK(SRB || VIDEO ? 8192 : 512),
+      .STREAM_LEAD(SRB || VIDEO ? 4096 : 1024),
+      .STREAM_GUARD(SRB || VIDEO ? 8192 : 1024),
+      .STREAM_AHEAD(VIDEO ? 49152 : SRB ? 16384 : 2048)
   ) dut_apf (
       .clk_74a(clk_74a),
       .ioctl_download(ioctl_download),
@@ -557,7 +573,8 @@ module tb_msu;
       errors = errors + 1;
     end
     id = file_id(path);
-    $display("[%0t] APF openfile slot %0d '%s' -> %0s", $time, slot, path, id ? "found" : "missing");
+    if (REAL) repeat (OPEN_US * 74) @(posedge clk_74a);
+    if (!REAL) $display("[%0t] APF openfile slot %0d '%s' -> %0s", $time, slot, path, id ? "found" : "missing");
     if (id == 0) result = 3;
     else begin
       slot_file[slot] = id;
@@ -574,7 +591,7 @@ module tb_msu;
       result = 2;
       return;
     end
-    if (SRB) begin
+    if (REAL) begin
       repeat (CMD_US * 74) @(posedge clk_74a);
       if (slot != last_slot) repeat (SWITCH_US * 74) @(posedge clk_74a);
       if (slot != last_slot) slot_switches = slot_switches + 1;
@@ -743,6 +760,120 @@ module tb_msu;
     end
   endtask
 
+  integer open_max_us = 0;
+  task automatic track_open(input integer t, output reg missing);
+    reg [7:0] st;
+    realtime t0;
+    cpu_write(4, t[7:0]);
+    cpu_write(5, t[15:8]);
+    t0 = $realtime;
+    wait_status_clear(6, "audio busy (track open)");
+    if (($realtime - t0) / 1000.0 > open_max_us) open_max_us = ($realtime - t0) / 1000.0;
+    cpu_read(0, st);
+    missing = st[3];
+  endtask
+
+  // z3randomizer msu.asm: identify, detect packs (tracks 1, 101, ...), scan 64 tracks for SPC
+  // fallback, then play with fades, stop with resume, play another, and resume the first
+  task automatic z3r_pattern();
+    reg missing;
+    reg [7:0] v;
+    integer t, i, resume_sample;
+    string ident;
+    ident = "";
+    for (i = 2; i < 8; i = i + 1) begin
+      cpu_read(i, v);
+      ident = {ident, string'(v)};
+    end
+    if (ident != "S-MSU1") begin
+      $display("FAIL: ident '%s'", ident);
+      errors = errors + 1;
+    end
+    track_open(1, missing);
+    if (missing) begin $display("FAIL: pack track 1 missing"); errors = errors + 1; end
+    track_open(101, missing);
+    if (!missing) begin $display("FAIL: track 101 should be missing"); errors = errors + 1; end
+    for (t = 64; t >= 1; t = t - 1) begin
+      track_open(t, missing);
+      if (missing != !(t == 1 || t == 2 || t == 12 || t == 34)) begin
+        $display("FAIL: track %0d missing=%0d", t, missing);
+        errors = errors + 1;
+      end
+    end
+    $display("[%0t] z3r: 66 track opens, longest %0d us", $time, open_max_us);
+
+    // Track 34 with repeat, fading in one volume step per "frame"
+    track_open(34, missing);
+    cpu_write(6, 0);
+    cap_count = 0;
+    cap_id = 5;
+    cap_total = T34_SAMPLES;
+    cap_loop = T34_LOOP;
+    cap_started = 0;
+    cpu_write(7, 8'h03);
+    for (i = 0; i < 16; i = i + 1) begin
+      cpu_write(6, i * 16 + 15);
+      #1_000_000;
+    end
+    while (cap_count < 1500) @(posedge clk_sys);
+    // Stop with resume, as when a room's music is interrupted
+    cpu_write(7, 8'h04);
+    resume_sample = m_resume_sector * 256 - 2;
+    $display("[%0t] z3r: track 34 stopped with resume after %0d samples, resumes at sample %0d", $time,
+             cap_count, resume_sample);
+    track_open(2, missing);
+    cap_count = 0;
+    cap_id = 4;
+    cap_total = T2_SAMPLES;
+    cap_loop = 0;
+    cap_started = 0;
+    cpu_write(6, 8'hFF);
+    cpu_write(7, 8'h01);
+    while (cap_count < 300) @(posedge clk_sys);
+    cpu_write(7, 8'h00);
+    // Back to track 34: MSU.sv resumes it from the saved sector
+    track_open(34, missing);
+    cap_count = resume_sample;
+    cap_id = 5;
+    cap_total = T34_SAMPLES;
+    cap_loop = T34_LOOP;
+    cap_started = 0;
+    cpu_write(7, 8'h03);
+    while (cap_count < resume_sample + 800) @(posedge clk_sys);
+    cpu_write(7, 8'h00);
+    $display("[%0t] z3r: track 34 resumed and played to sample %0d", $time, cap_count);
+  endtask
+
+  // MSU-1 video player: header at 0, then one seek and VIDEO_KB per vblank at 60Hz while
+  // music loops; the stream must never fall behind
+  task automatic video_pattern();
+    integer f, addr;
+    realtime t0;
+    cpu_write(6, 8'hFF);
+    cpu_write(4, 1);
+    cpu_write(5, 0);
+    wait_status_clear(6, "audio busy (video music)");
+    cap_count = 0;
+    cap_id = 2;
+    cap_total = T1_SAMPLES;
+    cap_loop = 0;
+    cap_started = 0;
+    cpu_write(7, 8'h03);
+    srb_seek(0);
+    srb_read(0, 64);
+    addr = 4096;
+    srb_seek(addr);
+    for (f = 0; f < 60 && addr + VIDEO_KB * 1024 < MSU_SIZE; f = f + 1) begin
+      t0 = $realtime;
+      srb_read(addr, VIDEO_KB * 1024);
+      addr = addr + VIDEO_KB * 1024;
+      while ($realtime - t0 < 16_667_000.0) @(posedge clk_sys);
+    end
+    cpu_write(7, 8'h00);
+    $display("[%0t] video: %0d frames of %0dKB at 60Hz (%0d KB/s), %0d slot switches, %0d samples", $time, f,
+             VIDEO_KB, VIDEO_KB * 60, slot_switches, cap_count);
+  endtask
+
   // Header and chapter pointer at the file start, then per frame: the chapter's frame table,
   // the frame's data, and its palette, with track 1 looping meanwhile
   task automatic srb_pattern();
@@ -842,7 +973,7 @@ module tb_msu;
       end
 
       // Data port: seek, wait for busy to clear, stream bytes
-      for (base = 'h123; !SRB && base < MSU_SIZE; base = base + 'h4D1) begin
+      for (base = 'h123; !REAL && base < MSU_SIZE; base = base + 'h4D1) begin
         cpu_write(0, base[7:0]);
         cpu_write(1, base[15:8]);
         cpu_write(2, 0);
@@ -859,7 +990,9 @@ module tb_msu;
         end
       end
       if (SRB) srb_pattern();
-      if (STREAM && !SRB) begin
+      if (Z3R) z3r_pattern();
+      if (VIDEO) video_pattern();
+      if (STREAM && !REAL) begin
         // One long read across several ring wraps while chunks refill behind it
         base = 5000;
         cpu_write(0, base[7:0]);
@@ -878,6 +1011,8 @@ module tb_msu;
       end
       $display("[%0t] data port checked, longest seek %0.1f us", $time, seek_max / 1000.0);
 
+      // Generic audio checks; the realistic scenarios cover their own track sets
+      if (!REAL) begin
       // Missing track
       cpu_write(4, 2);
       cpu_write(5, 0);
@@ -930,6 +1065,7 @@ module tb_msu;
       if (underflows > 4) begin
         $display("FAIL: %0d FIFO underflows while looping", underflows);
         errors = errors + 1;
+      end
       end
     end
 

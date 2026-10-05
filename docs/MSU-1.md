@@ -130,6 +130,18 @@ and chunk sizes and music playing at its real rate. The mock APF there charges 3
 and 3ms whenever the slot changes (`CMD_US`, `SWITCH_US`). It fails any seek over 30ms: the
 longest is 16.6ms, and 22.8ms with a 10ms switch penalty.
 
+Game scenarios in `sim/msu` (run them all with `make -C sim/msu`):
+
+| Case | Modeled on | Checks |
+|---|---|---|
+| `srb` | Super Road Blaster (FMV) | 92 seeks: frame table / frame data / palette every frame, with music; every seek under 30ms |
+| `z3r` | ALttP randomizer (`z3randomizer` `msu.asm`), the usual audio-pack code | Empty `.msu`, ident, pack detection (tracks 1, 101), a 64-track fallback scan with missing tracks, fades, stop with resume and continuing from the saved sector |
+| `video` | MSU-1 video players | One seek, then 6KB per vblank at 60Hz (360KB/s, about what a SNES can move to VRAM) with music, no underrun |
+| `video_fast` | Same, as a stress test | 12KB per vblank (720KB/s) |
+
+The z3r track files are realistic lengths: a track under 2KB hits the upstream `msu_audio`
+quirk below.
+
 **APF's file cache:** the [openFPGA 2.1 changelog](https://www.analogue.co/developer/docs/openfpga/changelog/2-1)
 says a target read walks the file's cluster chain and caches up to 16 fragments, so later reads
 of the same slot seek instantly, but the cache is lost whenever another data slot is accessed.

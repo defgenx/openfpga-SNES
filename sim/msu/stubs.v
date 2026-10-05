@@ -73,7 +73,7 @@ module CEGen (
 );
   // Sample rate is scaled so a track plays in reasonable sim time, except for the
   // Super Road Blaster case, where music must request sectors at its real rate
-`ifdef SRB_SIM
+`ifdef REAL_SIM
   parameter SPEEDUP = 1;
 `else
   parameter SPEEDUP = 8;
