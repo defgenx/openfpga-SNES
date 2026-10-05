@@ -23,7 +23,7 @@ module msu_apf #(
     parameter [31:0] STREAM_GUARD = 32'h0010_0000,  // ring space kept free behind the reader
     // Read-ahead past the reader. Fetching only this far keeps SDRAM writes near the game's
     // read rate, so they rarely compete with its reads
-    parameter [31:0] STREAM_AHEAD = 32'h0004_0000,  // must stay below RING_SIZE - STREAM_GUARD
+    parameter [31:0] STREAM_AHEAD = 32'h0004_0000,  // must stay below RING_SIZE/2 - STREAM_GUARD
     // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
     parameter QUIET_BITS = 20,
     // Give up on an unanswered target command during the boot probe: Get/Open File after
@@ -89,6 +89,8 @@ module msu_apf #(
     // (with copy_base/copy_len, latched by the store), fill done after it, and copy done once
     // the chunk is in SDRAM; a bank is reused only after its copy is done
     output reg [1:0] copy_req_toggle = 0,
+    output wire copy_region,  // streaming: SDRAM region of the window the chunk belongs to
+    output wire seek_region,  // streaming: SDRAM region the reader is in after a seek
     output wire [31:0] copy_base,  // the chunk's read_offset/read_length, stable for the read
     output wire [13:0] copy_len,
     output reg [1:0] fill_done_toggle = 0,
@@ -98,7 +100,8 @@ module msu_apf #(
     output reg data_seek_resp_toggle = 0,
     output reg pos_req_toggle = 0,
     input wire pos_ack_toggle,
-    input wire [31:0] pos_value
+    input wire [31:0] pos_value,
+    input wire pos_seeking  // pos_value was taken while a seek was in flight: not the reader's
 );
   localparam S_IDLE = 0;
   localparam S_GETFILE_DONE = 1;
@@ -124,6 +127,8 @@ module msu_apf #(
   localparam S_POS_WAIT = 22;
   localparam S_FETCH = 23;
   localparam S_PRELOAD = 24;
+  localparam S_FETCH_CHECK = 25;
+  localparam S_FETCH_GO = 26;
 
   reg [4:0] state = S_IDLE;
   reg [4:0] cmd_return;
@@ -287,20 +292,26 @@ module msu_apf #(
   localparam [31:0] RING_SIZE = 32'd1 << RING_BITS;
   localparam [31:0] RING_MASK = RING_SIZE - 1'd1;
 
-  // Streaming window: file bytes [win_start, win_end) are in SDRAM; [win_end, fetch_end) is
-  // read from APF and waiting for, or in, its copy
+  // Streaming: two windows in their own halves of the SDRAM ring (regions). The active one
+  // holds file bytes [win_start, win_end) in SDRAM, with [win_end, fetch_end) read from APF
+  // and being copied, and is read ahead. The parked one keeps [park_start, park_end) from
+  // the last window the game left: Super Road Blaster alternates between a chapter's frame
+  // table and frame data every frame, so both stay buffered.
   // .msu offsets are 30 bits: files up to 1GB, MiSTer's limit too
   localparam OB = 30;
+  localparam [31:0] REGION_SIZE = RING_SIZE >> 1;
   reg [OB-1:0] data_size = 0;
   reg [OB-1:0] win_start = 0;
   reg [OB-1:0] win_end = 0;
   reg [OB-1:0] fetch_end = 0;
+  reg [OB-1:0] park_start = 0;
+  reg [OB-1:0] park_end = 0;  // empty when equal to park_start
+  reg act_region = 0;
   reg [1:0] copy_outstanding = 0;  // per bank: read issued, chunk not yet in SDRAM
   reg [13:0] pend_len0 = 0;
   reg [13:0] pend_len1 = 0;
   reg cur_bank = 0;  // bank the next .msu read fills
   reg done_bank = 0;  // bank whose copy completes next (chunks complete in order)
-  reg stream_started = 0;  // read-ahead waits for the game's first seek
   wire any_outstanding = |copy_outstanding;
   wire bank_free = !copy_outstanding[cur_bank];
   wire done_bank_copied = done_bank ? copy_done1_s[2] == copy_req_toggle[1]
@@ -316,8 +327,13 @@ module msu_apf #(
   wire [13:0] chunk_length = stream_left < chunk_limit ? stream_left[13:0] : chunk_limit;
   assign copy_base = read_offset;
   assign copy_len = read_length;
+  // Bytes up to REGION_SIZE - STREAM_GUARD behind a window's end are still in its region
   wire seek_restart = seek_addr < win_start || seek_addr >= fetch_end
-      || fetch_end - seek_addr >= RING_SIZE - STREAM_GUARD;
+      || fetch_end - seek_addr >= REGION_SIZE - STREAM_GUARD;
+  wire seek_in_parked = seek_addr >= park_start && seek_addr < park_end
+      && park_end - seek_addr < REGION_SIZE - STREAM_GUARD;
+  assign copy_region = act_region;
+  assign seek_region = act_region;
 
   // core_bridge_cmd copies these when it starts the queued command; they hold until done
   assign target_dataslot_id = cmd == CMD_GETFILE ? 16'd0 : opened_slot;
@@ -357,7 +373,6 @@ module msu_apf #(
       stream_mode <= 0;
       stream_underrun <= 0;
       preloading <= 0;
-      stream_started <= 0;
       probe_status <= 0;
     end
 
@@ -398,23 +413,31 @@ module msu_apf #(
           drain <= 0;
           state <= S_READ;
         end else if (stream_mode && data_seek_pending && !(seek_restart && any_outstanding)) begin
-          // Keep the window when the seek lands inside it (bytes up to RING_SIZE -
-          // STREAM_GUARD behind fetch_end are still in the ring), else restart it there once
-          // the chunk being copied is in
+          // Inside the active window: keep it. Inside the parked one: swap them. Elsewhere:
+          // park the active window and start a new one at the seek, in the other region.
+          // Switching waits for the chunks being copied, which belong to the active window.
           data_seek_seen <= data_seek_s[2];
           seek_target <= seek_addr;
           seek_waiting <= 1;
-          stream_started <= 1;
           if (seek_restart) begin
-            win_start <= {seek_addr[OB-1:2], 2'b00};
-            win_end <= {seek_addr[OB-1:2], 2'b00};
-            fetch_end <= {seek_addr[OB-1:2], 2'b00};
+            park_start <= win_start;
+            park_end <= win_end;
+            act_region <= ~act_region;
+            if (seek_in_parked) begin
+              win_start <= park_start;
+              win_end <= park_end;
+              fetch_end <= park_end;
+            end else begin
+              win_start <= {seek_addr[OB-1:2], 2'b00};
+              win_end <= {seek_addr[OB-1:2], 2'b00};
+              fetch_end <= {seek_addr[OB-1:2], 2'b00};
+            end
           end
         end else if (stream_mode && seek_waiting
             && (win_end >= seek_target + STREAM_LEAD || win_end >= data_size)) begin
           seek_waiting <= 0;
           data_seek_resp_toggle <= data_seek_seen;
-        end else if (stream_mode && stream_started && bank_free && fetch_end < data_size) begin
+        end else if (stream_mode && bank_free && fetch_end < data_size) begin
           // Ask where the reader is, then decide whether to fetch the next chunk
           pos_req_toggle <= ~pos_req_toggle;
           state <= S_POS_WAIT;
@@ -426,9 +449,13 @@ module msu_apf #(
         end
       end
 
-      S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH;
+      S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH_CHECK;
 
-      S_FETCH: begin
+      // A position taken during a seek says nothing about the active window; the seek itself
+      // is handled from S_IDLE
+      S_FETCH_CHECK: state <= pos_seeking && !seek_waiting ? S_IDLE : S_FETCH_GO;
+
+      S_FETCH_GO: begin
         state <= S_IDLE;
         stream_fill <= stream_base_w > win_end ? 6'd0
             : win_end - stream_base_w >= STREAM_AHEAD ? 6'd63
@@ -614,7 +641,9 @@ module msu_apf #(
           win_end <= 0;
           fetch_end <= 0;
           seek_waiting <= 0;
-          stream_started <= 0;
+          park_start <= 0;
+          park_end <= 0;
+          act_region <= 0;
           if (cmd_ok && slot_size > DATA_MAX_SIZE) begin
             // Too big to copy: stream it on demand from the first seek
             stream_mode <= 1;

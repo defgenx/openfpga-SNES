@@ -114,6 +114,7 @@ module msu_sdram_store #(
     input wire pos_req_toggle,
     output reg pos_ack_toggle = 0,
     output reg [31:0] pos_value = 0,
+    output reg pos_seeking = 0,  // pos_value was taken while a seek was in flight
 
     // Bounce buffer: chunk words from msu_bridge_rx, addressed {bank, byte offset in chunk}
     input wire msu_data_download,  // boot copy in progress: the SNES is in reset
@@ -123,6 +124,8 @@ module msu_sdram_store #(
     // Per bank: a request (latching copy_base/copy_len) before its chunk arrives, fill done
     // once it has all arrived, and copy done once it is all in SDRAM
     input wire [1:0] copy_req_toggle,
+    input wire copy_region,  // streaming: ring region the requested chunk goes to
+    input wire seek_region,  // streaming: ring region of the reader, valid with the seek response
     input wire [31:0] copy_base,
     input wire [CHUNK_WORD_BITS+2:0] copy_len,
     input wire [1:0] fill_done_toggle,
@@ -143,9 +146,16 @@ module msu_sdram_store #(
     input wire sni_ready
 );
   // Word addresses wrap at the ring size
+  // Streaming splits the ring into two regions, one per msu_apf window
   localparam [22:0] WORD_MASK = (23'd1 << (RING_BITS - 1)) - 1'd1;
+  localparam [22:0] REGION_WORD_MASK = WORD_MASK >> 1;
+  function automatic [22:0] wrap_in(input region, input [22:0] w);
+    wrap_in = stream_mode ? (w & REGION_WORD_MASK) | ({22'd0, region} << (RING_BITS - 2))
+        : w & WORD_MASK;
+  endfunction
+  reg read_region = 0;
   function automatic [22:0] wrap(input [22:0] w);
-    wrap = w & WORD_MASK;
+    wrap = wrap_in(read_region, w);
   endfunction
 
   // Bounce buffer: APF fills a bank at bridge speed, the copy drains it at SNI speed. A bank
@@ -166,6 +176,8 @@ module msu_sdram_store #(
   reg [1:0] pending = 0;
   reg [1:0] filled = 0;
   reg [23:0] base0 = 0, base1 = 0;  // the ring only uses the low 24 bits of the file offset
+  reg region0 = 0, region1 = 0;
+  reg copy_cur_region = 0;
   reg [CHUNK_WORD_BITS+2:0] len0 = 0, len1 = 0;
   reg [CHUNK_WORD_BITS:0] arrived0 = 0, arrived1 = 0;
   // Delayed a cycle: a word counted here is readable through cbuf_q
@@ -192,7 +204,10 @@ module msu_sdram_store #(
     seek_resp_s <= {seek_resp_s[1:0], seek_resp_toggle};
     pos_req_s <= {pos_req_s[1:0], pos_req_toggle};
     if (pos_req_s[2] != pos_ack_toggle) begin
+      // MSU.sv moves rd_addr as soon as the game writes a seek, before msu_apf hears of it,
+      // so flag positions taken during a seek
       pos_value <= rd_addr;
+      pos_seeking <= rd_seek || seek_pending || seek_active;
       pos_ack_toggle <= pos_req_s[2];
     end
   end
@@ -226,7 +241,7 @@ module msu_sdram_store #(
       && rd_word == wrap(cur_word + 1'd1);
   wire copy_go = st == ST_IDLE && copying && copy_q_ok && copy_word_ready && !prefetch_go;
   // SNI word of the buffered word being copied (copy_cur_base is 4-byte aligned)
-  wire [22:0] copy_sni_word = wrap(copy_cur_base[23:1] + {copy_idx, 1'b0} + copy_half);
+  wire [22:0] copy_sni_word = wrap_in(copy_cur_region, copy_cur_base[23:1] + {copy_idx, 1'b0} + copy_half);
 
   always @(posedge clk_sys) begin
     req0_s <= {req0_s[1:0], copy_req_toggle[0]};
@@ -243,6 +258,7 @@ module msu_sdram_store #(
     if (req0_s[2] != req_seen[0]) begin
       req_seen[0] <= req0_s[2];
       base0 <= copy_base[23:0];
+      region0 <= copy_region;
       len0 <= copy_len;
       arrived0 <= 0;
       filled[0] <= 0;
@@ -251,6 +267,7 @@ module msu_sdram_store #(
     if (req1_s[2] != req_seen[1]) begin
       req_seen[1] <= req1_s[2];
       base1 <= copy_base[23:0];
+      region1 <= copy_region;
       len1 <= copy_len;
       arrived1 <= 0;
       filled[1] <= 0;
@@ -276,6 +293,7 @@ module msu_sdram_store #(
       copy_idx <= 0;
       copy_half <= 0;
       copy_cur_base <= eng_bank ? base1 : base0;
+      copy_cur_region <= eng_bank ? region1 : region0;
       copy_left <= ((eng_bank ? len1 : len0) + 2'd3) >> 2;
       copy_q_ok <= 0;
     end else if (copying && copy_left == 0) begin
@@ -319,9 +337,11 @@ module msu_sdram_store #(
           seek_req_toggle <= ~seek_req_toggle;
           stream_seek_wait <= 1;
         end else if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) begin
+          // The reader is now in the region msu_apf answered with
           stream_seek_wait <= 0;
-          cur_word <= rd_word;
-          sni_addr <= {1'b1, rd_word, 1'b0};
+          read_region <= seek_region;
+          cur_word <= wrap_in(seek_region, rd_addr[23:1]);
+          sni_addr <= {1'b1, wrap_in(seek_region, rd_addr[23:1]), 1'b0};
           sni_rd_req <= 1;
           dst <= DST_CUR;
           wait_cnt <= 0;

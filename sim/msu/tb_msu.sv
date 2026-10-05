@@ -12,13 +12,20 @@ module tb_msu;
   parameter STRUCT_SWAP = 0;
   // .msu larger than the (scaled-down) ring: streamed instead of copied at boot
   parameter STREAM = 0;
-  localparam RING_BITS = 13;
+  // Super Road Blaster's access pattern with the hardware's chunk and lead sizes, music
+  // playing at its real rate, and APF costs: a fixed latency per read plus a penalty when the
+  // slot changes (APF drops its cluster-chain cache then; see docs/MSU-1.md)
+  parameter SRB = 0;
+  parameter CMD_US = 300;
+  parameter SWITCH_US = 3000;
+  localparam SEEK_BUDGET_US = 30000;  // the game polls MSU_STATUS $2000 times, ~34ms
+  localparam RING_BITS = SRB ? 17 : 13;
 
   // ROM path chosen to exercise dots in directory names and in the file name
   localparam string ROM_PATH = "/Assets/snes/common/msu.packs/Game.v1.sfc";
   localparam string BASE = "/Assets/snes/common/msu.packs/Game.v1";
 
-  localparam integer MSU_SIZE = STREAM ? 40000 : 3001;
+  localparam integer MSU_SIZE = SRB ? 300000 : STREAM ? 40000 : 3001;
   localparam integer T1_SAMPLES = 700;  // 2 full sectors + a partial one
   localparam integer T12_SAMPLES = 900;  // upstream drops a partial sector right after sector 0
   localparam integer T12_LOOP = 300;
@@ -179,16 +186,17 @@ module tb_msu;
   wire stream_underrun;
   wire stream_mode, seek_req_t, seek_resp_t, pos_req_t, pos_ack_t;
   wire [31:0] seek_addr, pos_value;
+  wire pos_seeking;
 
   msu_apf #(
       .QUIET_BITS(8),
       .TIMEOUT_BITS(26),
       .RING_BITS(RING_BITS),
       .DATA_MAX_SIZE(4096),
-      .STREAM_CHUNK(512),
-      .STREAM_LEAD(1024),
-      .STREAM_GUARD(1024),
-      .STREAM_AHEAD(2048)
+      .STREAM_CHUNK(SRB ? 8192 : 512),
+      .STREAM_LEAD(SRB ? 4096 : 1024),
+      .STREAM_GUARD(SRB ? 8192 : 1024),
+      .STREAM_AHEAD(SRB ? 16384 : 2048)
   ) dut_apf (
       .clk_74a(clk_74a),
       .ioctl_download(ioctl_download),
@@ -230,7 +238,10 @@ module tb_msu;
       .pos_req_toggle(pos_req_t),
       .pos_ack_toggle(pos_ack_t),
       .pos_value(pos_value),
+      .pos_seeking(pos_seeking),
       .copy_req_toggle(copy_req_t),
+      .copy_region(copy_region),
+      .seek_region(seek_region),
       .copy_base(copy_base),
       .copy_len(copy_len),
       .fill_done_toggle(fill_done_t),
@@ -380,6 +391,7 @@ module tb_msu;
   wire sni_wr_req, sni_rd_req;
   reg sni_ready = 0;
   wire [1:0] copy_req_t, copy_done_t, fill_done_t;
+  wire copy_region, seek_region;
   wire [31:0] copy_base;
   wire [13:0] copy_len;
 
@@ -397,11 +409,14 @@ module tb_msu;
       .pos_req_toggle(pos_req_t),
       .pos_ack_toggle(pos_ack_t),
       .pos_value(pos_value),
+      .pos_seeking(pos_seeking),
       .msu_data_download(msu_data_download_s),
       .load_valid(rx_valid & ~rx_addr[27]),
       .load_addr(rx_addr[13:0]),
       .load_data(rx_data),
       .copy_req_toggle(copy_req_t),
+      .copy_region(copy_region),
+      .seek_region(seek_region),
       .copy_base(copy_base),
       .copy_len(copy_len),
       .fill_done_toggle(fill_done_t),
@@ -421,7 +436,7 @@ module tb_msu;
   ////////////////////////////////////////////////////////////////////////////
   // SNI model in clk_mem: ready drops on a request edge, rises after a random delay
 
-  reg [15:0] sdram[0:8191];
+  reg [15:0] sdram[0:65535];
   reg old_wr = 0, old_rd = 0;
   integer sni_delay = 0;
   reg sni_is_wr = 0;
@@ -432,7 +447,7 @@ module tb_msu;
     old_wr <= sni_wr_req;
     old_rd <= sni_rd_req;
     if ((sni_wr_req && !old_wr) || (sni_rd_req && !old_rd)) begin
-      if (!sni_addr[24] || sni_addr[23:14] != 0) begin
+      if (!sni_addr[24] || sni_addr[23:17] != 0) begin
         $display("FAIL: SNI address %h outside test window", sni_addr);
         $finish;
       end
@@ -446,8 +461,8 @@ module tb_msu;
     end else if (sni_delay > 0) begin
       sni_delay <= sni_delay - 1;
       if (sni_delay == 1) begin
-        if (sni_is_wr) sdram[sni_lat_addr[13:1]] <= sni_lat_din;
-        else sni_dout <= sdram[sni_lat_addr[13:1]];
+        if (sni_is_wr) sdram[sni_lat_addr[16:1]] <= sni_lat_din;
+        else sni_dout <= sdram[sni_lat_addr[16:1]];
         sni_ready <= 1;
       end
     end
@@ -457,6 +472,8 @@ module tb_msu;
   // Mock APF
 
   integer slot_file[0:31];
+  integer last_slot = -1;
+  integer slot_switches = 0;
   integer errors = 0;
 
   task automatic bw_raw(input [31:0] addr, input [31:0] raw);
@@ -556,6 +573,12 @@ module tb_msu;
     if (id == 0 || off + len > file_size(id)) begin
       result = 2;
       return;
+    end
+    if (SRB) begin
+      repeat (CMD_US * 74) @(posedge clk_74a);
+      if (slot != last_slot) repeat (SWITCH_US * 74) @(posedge clk_74a);
+      if (slot != last_slot) slot_switches = slot_switches + 1;
+      last_slot = slot;
     end
     for (i = 0; i < len; i = i + 4) begin
       bw_raw(baddr + i, pack(file_byte(id, off + i), i + 1 < len ? file_byte(id, off + i + 1) : 0,
@@ -676,6 +699,20 @@ module tb_msu;
     end
   end
 
+  integer seek_log = 0;
+  always @(posedge clk_74a)
+    if (SRB && dut_apf.state == 0 && dut_apf.stream_mode && dut_apf.data_seek_pending
+        && !(dut_apf.seek_restart && dut_apf.any_outstanding) && seek_log < 40) begin
+      seek_log = seek_log + 1;
+      $display("[%0t] SEEK %0d: %s active=%0d..%0d/%0d parked=%0d..%0d", $time, dut_apf.seek_addr,
+               !dut_apf.seek_restart ? "keep" : dut_apf.seek_in_parked ? "swap" : "restart",
+               dut_apf.win_start, dut_apf.win_end, dut_apf.fetch_end, dut_apf.park_start, dut_apf.park_end);
+    end
+  always @(posedge dut_apf.stream_underrun)
+    $display("[%0t] UNDERRUN base=%0d win=%0d..%0d fetch_end=%0d park=%0d..%0d seek_waiting=%0d pos=%0d",
+             $time, dut_apf.stream_base_w, dut_apf.win_start, dut_apf.win_end, dut_apf.fetch_end,
+             dut_apf.park_start, dut_apf.park_end, dut_apf.seek_waiting, dut_apf.pos_value);
+
   // Handshake trace
   always @(track_resp_toggle) $display("[%0t] track resp size=%0d", $time, track_size);
   always @(sector_req_toggle) $display("[%0t] sector req %0d", $time, sector_num);
@@ -683,6 +720,66 @@ module tb_msu;
   always @(posedge m_stop) $display("[%0t] msu_audio stop, sector=%0d size=%0d", $time, m_sector, m_audio_size);
 
   realtime seek_t0, seek_max = 0;
+
+  task automatic srb_seek(input integer addr);
+    cpu_write(0, addr[7:0]);
+    cpu_write(1, addr[15:8]);
+    cpu_write(2, addr[23:16]);
+    cpu_write(3, 0);
+    seek_t0 = $realtime;
+    wait_status_clear(7, "data busy (SRB seek)");
+    if ($realtime - seek_t0 > seek_max) seek_max = $realtime - seek_t0;
+  endtask
+
+  task automatic srb_read(input integer addr, input integer n);
+    reg [7:0] v;
+    integer i;
+    for (i = 0; i < n; i = i + 1) begin
+      cpu_read(1, v);
+      if (v !== file_byte(1, addr + i)) begin
+        if (errors < 10) $display("FAIL: SRB data[%0d] got %h want %h", addr + i, v, file_byte(1, addr + i));
+        errors = errors + 1;
+      end
+    end
+  endtask
+
+  // Header and chapter pointer at the file start, then per frame: the chapter's frame table,
+  // the frame's data, and its palette, with track 1 looping meanwhile
+  task automatic srb_pattern();
+    integer f, chapter, frame;
+    reg [7:0] st;
+    cpu_write(6, 8'hFF);
+    cpu_write(4, 1);
+    cpu_write(5, 0);
+    wait_status_clear(6, "audio busy (SRB music)");
+    cap_count = 0;
+    cap_id = 2;
+    cap_total = T1_SAMPLES;
+    cap_loop = 0;
+    cap_started = 0;
+    cpu_write(7, 8'h03);
+    srb_seek(0);
+    srb_read(0, 64);
+    srb_seek('h100);
+    srb_read('h100, 4);
+    chapter = 60000;
+    for (f = 0; f < 30; f = f + 1) begin
+      frame = chapter + 'h2000 + f * 6000;
+      srb_seek(chapter + 4 * f);
+      srb_read(chapter + 4 * f, 4);
+      srb_seek(frame);
+      srb_read(frame, 2000);
+      srb_seek(frame + 5000);
+      srb_read(frame + 5000, 256);
+    end
+    cpu_write(7, 8'h00);
+    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us (budget %0d us), %0d slot switches, %0d samples",
+             $time, seek_max / 1000.0, SEEK_BUDGET_US, slot_switches, cap_count);
+    if (seek_max > SEEK_BUDGET_US * 1000.0) begin
+      $display("FAIL: a seek took longer than the game allows");
+      errors = errors + 1;
+    end
+  endtask
   initial begin : test
     reg [7:0] v, st;
     integer i, base;
@@ -745,7 +842,7 @@ module tb_msu;
       end
 
       // Data port: seek, wait for busy to clear, stream bytes
-      for (base = 'h123; base < MSU_SIZE; base = base + 'h4D1) begin
+      for (base = 'h123; !SRB && base < MSU_SIZE; base = base + 'h4D1) begin
         cpu_write(0, base[7:0]);
         cpu_write(1, base[15:8]);
         cpu_write(2, 0);
@@ -761,7 +858,8 @@ module tb_msu;
           end
         end
       end
-      if (STREAM) begin
+      if (SRB) srb_pattern();
+      if (STREAM && !SRB) begin
         // One long read across several ring wraps while chunks refill behind it
         base = 5000;
         cpu_write(0, base[7:0]);

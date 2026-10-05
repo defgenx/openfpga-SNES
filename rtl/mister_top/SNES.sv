@@ -175,9 +175,12 @@ module MAIN_SNES (
     input wire msu_pos_req_toggle,
     output wire msu_pos_ack_toggle,
     output wire [31:0] msu_pos_value,
+    output wire msu_pos_seeking,
 
     // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
     input wire [1:0] msu_copy_req_toggle,
+    input wire msu_copy_region,
+    input wire msu_seek_region,
     input wire [31:0] msu_copy_base,
     input wire [13:0] msu_copy_len,
     input wire [1:0] msu_fill_done_toggle,
@@ -1190,12 +1193,15 @@ module MAIN_SNES (
           .pos_req_toggle(msu_pos_req_toggle),
           .pos_ack_toggle(msu_pos_ack_toggle),
           .pos_value(msu_pos_value),
+          .pos_seeking(msu_pos_seeking),
 
           .msu_data_download(msu_data_download_s),
           .load_valid(msu_rx_valid & ~msu_rx_addr[27]),
           .load_addr(msu_rx_addr[13:0]),
           .load_data(msu_rx_data),
           .copy_req_toggle(msu_copy_req_toggle),
+          .copy_region(msu_copy_region),
+          .seek_region(msu_seek_region),
           .copy_base(msu_copy_base),
           .copy_len(msu_copy_len),
           .fill_done_toggle(msu_fill_done_toggle),
@@ -1239,6 +1245,7 @@ module MAIN_SNES (
       assign msu_data_seek_addr = 0;
       assign msu_pos_ack_toggle = 0;
       assign msu_pos_value = 0;
+      assign msu_pos_seeking = 0;
       assign msu_copy_done_toggle = 0;
     end
   endgenerate

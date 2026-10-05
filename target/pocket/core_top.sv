@@ -692,7 +692,10 @@ module core_top (
   wire msu_pos_req_toggle;
   wire msu_pos_ack_toggle;
   wire [31:0] msu_pos_value;
+  wire msu_pos_seeking;
   wire [1:0] msu_copy_req_toggle;
+  wire msu_copy_region;
+  wire msu_seek_region;
   wire [31:0] msu_copy_base;
   wire [13:0] msu_copy_len;
   wire [1:0] msu_fill_done_toggle;
@@ -748,8 +751,11 @@ module core_top (
       .pos_req_toggle(msu_pos_req_toggle),
       .pos_ack_toggle(msu_pos_ack_toggle),
       .pos_value(msu_pos_value),
+      .pos_seeking(msu_pos_seeking),
 
       .copy_req_toggle(msu_copy_req_toggle),
+      .copy_region(msu_copy_region),
+      .seek_region(msu_seek_region),
       .copy_base(msu_copy_base),
       .copy_len(msu_copy_len),
       .fill_done_toggle(msu_fill_done_toggle),
@@ -1115,8 +1121,11 @@ module core_top (
       .msu_pos_req_toggle(msu_pos_req_toggle),
       .msu_pos_ack_toggle(msu_pos_ack_toggle),
       .msu_pos_value(msu_pos_value),
+      .msu_pos_seeking(msu_pos_seeking),
 
       .msu_copy_req_toggle(msu_copy_req_toggle),
+      .msu_copy_region(msu_copy_region),
+      .msu_seek_region(msu_seek_region),
       .msu_copy_base(msu_copy_base),
       .msu_copy_len(msu_copy_len),
       .msu_fill_done_toggle(msu_fill_done_toggle),

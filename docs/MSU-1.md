@@ -97,15 +97,25 @@ A `.msu` file up to 16MB (`DATA_MAX_SIZE`) is copied whole at boot this way, chu
 and the game then reads it from SDRAM. A larger one, e.g. Super Road Blaster's video, is
 streamed:
 
-- **Ring:** SDRAM banks 2-3 become a ring, with file byte X at SDRAM address X mod 16MB
-  (`RING_BITS`). Offsets are 30 bits, so files up to 1GB, as on MiSTer. `msu_apf` tracks the
-  file bytes `[win_start, win_end)` that are in SDRAM, and
-  `fetch_end`, up to which bytes are read or being copied.
-- **Seek:** `msu_sdram_store` forwards the seek to `msu_apf` (`data_seek_req_toggle`). If the
-  offset is outside the window, the window restarts there, once copies in flight are done. The
-  seek completes, and MSU-1's data busy bit clears, once `STREAM_LEAD` (4KB) past it is in
-  SDRAM, fetched as a single read. Super Road Blaster gives up ("Timeout while seeking address
-  in MSU1 data-file") when a seek waited for 64KB behind a 16KB chunk already in flight.
+- **Ring and windows:** SDRAM banks 2-3 become a ring, split into two 8MB regions, one per
+  window. Offsets are 30 bits, so files up to 1GB, as on MiSTer. The *active* window holds file
+  bytes `[win_start, win_end)` in SDRAM, with `[win_end, fetch_end)` being read and copied, and
+  is read ahead. The *parked* window keeps `[park_start, park_end)` from the window the game
+  left. Super Road Blaster seeks every frame between a chapter's frame table and the frame
+  data; with one window, every such jump restarted it cold on the SD card.
+- **Seek:** `msu_sdram_store` forwards the seek to `msu_apf` (`data_seek_req_toggle`).
+  - Inside the active window: kept.
+  - Inside the parked window: the two swap, with no SD access.
+  - Elsewhere: the active window is parked and a new one starts at the seek, in the other
+    region.
+
+  Switching windows waits for chunks being copied. The seek completes, and MSU-1's data busy
+  bit clears, once `STREAM_LEAD` (4KB) past it is in SDRAM; `seek_region` tells the store which
+  region the reader is now in. The game allows about 30ms per seek: it polls MSU_STATUS `$2000`
+  times (`MSU1_SEEK_TIMEOUT` in its source).
+- **Reader position:** `msu_apf` polls it (`pos_req_toggle`) to decide on read-ahead. `MSU.sv`
+  moves the address as soon as the game writes a seek, so the store flags positions taken
+  during a seek (`pos_seeking`), and they are ignored.
 - **Read-ahead:** starts at the game's first seek. Between other work, `msu_apf` polls the reader's position (`pos_req_toggle`)
   and fetches the next `STREAM_CHUNK` (8KB) while `fetch_end` is less than `STREAM_AHEAD`
   (256KB) past it.
@@ -115,7 +125,16 @@ streamed:
   the reader if it got past `fetch_end`.
 
 `sim/msu` runs a 40,000-byte file through an 8KB ring (`le_stream`, `be_stream`), with a reader
-at full DMA speed.
+at full DMA speed. The `srb` case replays Super Road Blaster's pattern with the hardware's lead
+and chunk sizes and music playing at its real rate. The mock APF there charges 300µs per read
+and 3ms whenever the slot changes (`CMD_US`, `SWITCH_US`). It fails any seek over 30ms: the
+longest is 16.6ms, and 22.8ms with a 10ms switch penalty.
+
+**APF's file cache:** the [openFPGA 2.1 changelog](https://www.analogue.co/developer/docs/openfpga/changelog/2-1)
+says a target read walks the file's cluster chain and caches up to 16 fragments, so later reads
+of the same slot seek instantly, but the cache is lost whenever another data slot is accessed.
+Music (slot 21) and data (slot 20) alternate, so most `.msu` reads after a `.pcm` read pay that
+walk again.
 
 ## Memory
 

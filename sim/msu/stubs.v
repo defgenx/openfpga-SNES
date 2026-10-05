@@ -71,8 +71,13 @@ module CEGen (
     input wire [31:0] OUT_CLK,
     output reg CE
 );
-  // Sample rate is scaled by the testbench so a track plays in reasonable sim time
+  // Sample rate is scaled so a track plays in reasonable sim time, except for the
+  // Super Road Blaster case, where music must request sectors at its real rate
+`ifdef SRB_SIM
+  parameter SPEEDUP = 1;
+`else
   parameter SPEEDUP = 8;
+`endif
   reg [63:0] sum = 0;
   always @(negedge CLK or negedge RST_N) begin
     if (!RST_N) begin
