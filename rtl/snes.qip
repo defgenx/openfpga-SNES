@@ -1,5 +1,6 @@
 set_global_assignment -name QIP_FILE                  [file join $::quartus(qip_path) "upstream/snes_mister.qip"]
 
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "mister_top/SNES.sv"]
+set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "mister_top/msu_pocket.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "mister_top/rom_parser.sv"]
 set_global_assignment -name SYSTEMVERILOG_FILE        [file join $::quartus(qip_path) "mister_top/scanline_filler.sv"]

@@ -326,6 +326,10 @@ module core_top (
     if (bridge_addr[31:28] == 4'h2) begin
       bridge_rd_data <= sd_read_data;
     end
+
+    if (bridge_addr[31:28] == 4'h3) begin
+      bridge_rd_data <= msu_scratch_rd_data;
+    end
   end
 
   always @(posedge clk_74a) begin
@@ -494,6 +498,23 @@ module core_top (
 
       .osnotify_inmenu(osnotify_inmenu),
 
+      .target_dataslot_read(msu_target_read),
+      .target_dataslot_write(1'b0),
+      .target_dataslot_getfile(msu_target_getfile),
+      .target_dataslot_openfile(msu_target_openfile),
+
+      .target_dataslot_ack(),
+      .target_dataslot_done(target_dataslot_done),
+      .target_dataslot_err(target_dataslot_err),
+
+      .target_dataslot_id(msu_target_id),
+      .target_dataslot_slotoffset(msu_target_slotoffset),
+      .target_dataslot_bridgeaddr(msu_target_bridgeaddr),
+      .target_dataslot_length(msu_target_length),
+
+      .target_buffer_param_struct(32'h3000_0000),
+      .target_buffer_resp_struct(32'h3000_0000),
+
       .datatable_addr(datatable_addr),
       .datatable_wren(datatable_wren),
       .datatable_data(datatable_data),
@@ -607,6 +628,10 @@ module core_top (
       datatable_addr <= 0;
       datatable_data <= 0;
       datatable_wren <= 0;
+    end else if (msu_dt_active) begin
+      // msu_apf is reading a data slot size
+      datatable_wren <= 0;
+      datatable_addr <= msu_dt_addr;
     end else begin
       // Write sram size half of the time
       datatable_wren <= 1;
@@ -616,6 +641,121 @@ module core_top (
       datatable_addr <= 1 * 2 + 1;
     end
   end
+
+  ////////////////////////////  MSU-1  ////////////////////////////////////
+  // See docs/MSU-1.md. Bridge regions: 0x3 filename structs, 0x4 .msu data, 0x5 .pcm sectors
+
+  wire target_dataslot_done;
+  wire [2:0] target_dataslot_err;
+
+  wire msu_target_read;
+  wire msu_target_getfile;
+  wire msu_target_openfile;
+  wire [15:0] msu_target_id;
+  wire [31:0] msu_target_slotoffset;
+  wire [31:0] msu_target_bridgeaddr;
+  wire [31:0] msu_target_length;
+
+  wire msu_dt_active;
+  wire [9:0] msu_dt_addr;
+  wire [31:0] msu_scratch_rd_data;
+
+  wire msu_busy;
+  wire msu_enable;
+  wire msu_data_download;
+  wire msu_audio_download;
+
+  wire msu_track_req_toggle;
+  wire [15:0] msu_track_req_num;
+  wire msu_track_resp_toggle;
+  wire [31:0] msu_track_resp_size;
+  wire msu_sector_req_toggle;
+  wire [21:0] msu_sector_req_num;
+
+  msu_apf msu_apf (
+      .clk_74a(clk_74a),
+
+      .ioctl_download(ioctl_download),
+      .core_running  (reset_n),
+
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_wr(bridge_wr),
+      .bridge_wr_data(bridge_wr_data),
+      .scratch_rd_data(msu_scratch_rd_data),
+
+      .target_dataslot_read(msu_target_read),
+      .target_dataslot_getfile(msu_target_getfile),
+      .target_dataslot_openfile(msu_target_openfile),
+      .target_dataslot_done(target_dataslot_done),
+      .target_dataslot_err(target_dataslot_err),
+      .target_dataslot_id(msu_target_id),
+      .target_dataslot_slotoffset(msu_target_slotoffset),
+      .target_dataslot_bridgeaddr(msu_target_bridgeaddr),
+      .target_dataslot_length(msu_target_length),
+
+      .dt_active(msu_dt_active),
+      .dt_addr  (msu_dt_addr),
+      .dt_q     (datatable_q),
+
+      .msu_busy(msu_busy),
+      .msu_enable(msu_enable),
+      .msu_data_download(msu_data_download),
+      .audio_download(msu_audio_download),
+
+      .track_req_toggle(msu_track_req_toggle),
+      .track_num(msu_track_req_num),
+      .track_resp_toggle(msu_track_resp_toggle),
+      .track_size(msu_track_resp_size),
+
+      .sector_req_toggle(msu_sector_req_toggle),
+      .sector_num(msu_sector_req_num)
+  );
+
+  wire msu_data_wr;
+  wire [23:0] msu_data_wr_addr;
+  wire [15:0] msu_data_wr_data;
+
+  data_loader #(
+      .ADDRESS_MASK_UPPER_4(4'h4),
+      .ADDRESS_SIZE(24),
+      .WRITE_MEM_CLOCK_DELAY(7),
+      .OUTPUT_WORD_SIZE(2)
+  ) msu_data_loader (
+      .clk_74a(clk_74a),
+      .clk_memory(clk_sys_21_48),
+
+      .bridge_wr(bridge_wr),
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_wr_data(bridge_wr_data),
+
+      .write_en  (msu_data_wr),
+      .write_addr(msu_data_wr_addr),
+      .write_data(msu_data_wr_data)
+  );
+
+  wire msu_audio_wr;
+  wire [15:0] msu_audio_wr_data;
+
+  data_loader #(
+      .ADDRESS_MASK_UPPER_4(4'h5),
+      .ADDRESS_SIZE(11),
+      .WRITE_MEM_CLOCK_DELAY(7),
+      .OUTPUT_WORD_SIZE(2)
+  ) msu_audio_loader (
+      .clk_74a(clk_74a),
+      .clk_memory(clk_sys_21_48),
+
+      .bridge_wr(bridge_wr),
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_wr_data(bridge_wr_data),
+
+      .write_en  (msu_audio_wr),
+      .write_addr(),
+      .write_data(msu_audio_wr_data)
+  );
 
   wire [15:0] audio_l;
   wire [15:0] audio_r;
@@ -911,7 +1051,26 @@ module core_top (
 
       // Audio
       .audio_l(audio_l),
-      .audio_r(audio_r)
+      .audio_r(audio_r),
+
+      // MSU-1
+      .msu_enable(msu_enable),
+      .msu_busy(msu_busy),
+      .msu_data_download(msu_data_download),
+      .msu_audio_download(msu_audio_download),
+
+      .msu_data_wr(msu_data_wr),
+      .msu_data_wr_addr(msu_data_wr_addr),
+      .msu_data_wr_data(msu_data_wr_data),
+      .msu_audio_wr(msu_audio_wr),
+      .msu_audio_wr_data(msu_audio_wr_data),
+
+      .msu_track_req_toggle(msu_track_req_toggle),
+      .msu_track_req_num(msu_track_req_num),
+      .msu_track_resp_toggle(msu_track_resp_toggle),
+      .msu_track_resp_size(msu_track_resp_size),
+      .msu_sector_req_toggle(msu_sector_req_toggle),
+      .msu_sector_req_num(msu_sector_req_num)
   );
 
   // Video

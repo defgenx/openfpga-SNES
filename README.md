@@ -44,7 +44,23 @@ All original expansion chips supported by MiSTer are also supported on the Pocke
 * ST1010 (F1 Roc 2)
 * BSX (Satellaview)
 
-The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi Nidan Morita Shougi 2) are not supported in the MiSTer core, and therefore are not supported here. Additionally, the homebrew MSU expansion chip is not currently supported.
+The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi Nidan Morita Shougi 2) are not supported in the MiSTer core, and therefore are not supported here.
+
+#### MSU-1
+
+> **Warning**: Experimental, not yet tested on hardware
+
+The homebrew MSU-1 chip (CD-quality audio tracks and a streamed data file) is supported in the main and PAL cores, using the MiSTer naming scheme. Put the pack next to the ROM, with the same base name:
+
+```
+/Assets/snes/common/Zelda MSU/zelda.sfc
+/Assets/snes/common/Zelda MSU/zelda.msu      (required, may be empty)
+/Assets/snes/common/Zelda MSU/zelda-1.pcm
+/Assets/snes/common/Zelda MSU/zelda-2.pcm
+...
+```
+
+MSU-1 is enabled when `<rom>.msu` exists. The data file is copied to memory at boot (expect a short black screen for large packs) and only its first 16MB are available; packs with larger data files, such as FMV games, will not work fully. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
 
 #### BSX
 
