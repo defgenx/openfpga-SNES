@@ -15,8 +15,11 @@ module msu_apf #(
     // X mod 2^RING_BITS), see docs/MSU-1.md "Streaming"
     parameter RING_BITS = 24,
     parameter [31:0] DATA_MAX_SIZE = 32'h0100_0000,
-    parameter [31:0] STREAM_CHUNK = 32'h0000_4000,  // bytes per APF read while streaming
-    parameter [31:0] STREAM_LEAD = 32'h0001_0000,  // buffered past a seek before it completes
+    // Games time a seek out (Super Road Blaster: "Timeout while seeking"), so a seek completes
+    // once STREAM_LEAD bytes past it are in, fetched as one read; chunks stay small so one
+    // already in flight delays a seek only briefly
+    parameter [31:0] STREAM_CHUNK = 32'h0000_2000,  // bytes per APF read while streaming
+    parameter [31:0] STREAM_LEAD = 32'h0000_1000,  // buffered past a seek before it completes
     parameter [31:0] STREAM_GUARD = 32'h0010_0000,  // ring space kept free behind the reader
     // Read-ahead past the reader. Fetching only this far keeps SDRAM writes near the game's
     // read rate, so they rarely compete with its reads
@@ -387,7 +390,8 @@ module msu_apf #(
         end else if (win_end - stream_base_w < STREAM_AHEAD) begin  // STREAM_AHEAD < ring size
           op <= OP_DATA;
           read_offset <= win_end;
-          read_length <= stream_left < STREAM_CHUNK ? stream_left : STREAM_CHUNK;
+          read_length <= seek_waiting ? (stream_left < STREAM_LEAD ? stream_left : STREAM_LEAD)
+              : (stream_left < STREAM_CHUNK ? stream_left : STREAM_CHUNK);
           drain <= 0;
           state <= S_READ;
         end

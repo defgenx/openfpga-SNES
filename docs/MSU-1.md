@@ -96,9 +96,11 @@ it from SDRAM. A larger one, e.g. Super Road Blaster's video, is streamed instea
   (`RING_BITS`). `msu_apf` tracks the file bytes `[win_start, win_end)` that are present.
 - **Seek:** `msu_sdram_store` forwards the seek to `msu_apf` (`data_seek_req_toggle`). If the
   offset is outside the window, the window restarts there. The seek completes, and MSU-1's data
-  busy bit clears, once `STREAM_LEAD` (64KB) past it is in SDRAM.
+  busy bit clears, once `STREAM_LEAD` (4KB) past it is in SDRAM. That is fetched as a single
+  read: Super Road Blaster gives up ("Timeout while seeking address in MSU1 data-file") when a
+  seek took 64KB plus a 16KB chunk already in flight.
 - **Read-ahead:** between other work, `msu_apf` polls the reader's position (`pos_req_toggle`)
-  and fetches the next `STREAM_CHUNK` (16KB) while the window ends less than `STREAM_AHEAD`
+  and fetches the next `STREAM_CHUNK` (8KB) while the window ends less than `STREAM_AHEAD`
   (256KB) past it. Capping read-ahead keeps SDRAM writes near the game's read rate. A full
   16MB fill would compete with the game's reads for the SNI port.
 - **Priority:** `.pcm` sector requests go before data chunks. In `msu_sdram_store`, the
