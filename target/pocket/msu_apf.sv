@@ -20,7 +20,7 @@ module msu_apf #(
     parameter [31:0] STREAM_GUARD = 32'h0010_0000,  // ring space kept free behind the reader
     // Read-ahead past the reader. Fetching only this far keeps SDRAM writes near the game's
     // read rate, so they rarely compete with its reads
-    parameter [31:0] STREAM_AHEAD = 32'h0004_0000,
+    parameter [31:0] STREAM_AHEAD = 32'h0004_0000,  // must stay below RING_SIZE - STREAM_GUARD
     // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
     parameter QUIET_BITS = 20,
     // Give up on an unanswered target command during the boot probe: Get/Open File after
@@ -347,7 +347,9 @@ module msu_apf #(
           data_seek_seen <= data_seek_s[2];
           seek_target <= data_seek_addr;
           seek_waiting <= 1;
-          if (data_seek_addr < win_start || data_seek_addr >= win_end) begin
+          // Bytes up to RING_SIZE - STREAM_GUARD behind win_end are still in the ring
+          if (data_seek_addr < win_start || data_seek_addr >= win_end
+              || win_end - data_seek_addr >= RING_SIZE - STREAM_GUARD) begin
             win_start <= {data_seek_addr[31:2], 2'b00};
             win_end <= {data_seek_addr[31:2], 2'b00};
           end
@@ -375,8 +377,7 @@ module msu_apf #(
           // The reader got past the window: refill from where it is
           win_start <= stream_base_w;
           win_end <= stream_base_w;
-        end else if (win_end - stream_base_w < STREAM_AHEAD
-            && win_end - stream_base_w < RING_SIZE - STREAM_GUARD) begin
+        end else if (win_end - stream_base_w < STREAM_AHEAD) begin  // STREAM_AHEAD < ring size
           op <= OP_DATA;
           read_offset <= win_end;
           read_length <= stream_left < STREAM_CHUNK ? stream_left : STREAM_CHUNK;
@@ -586,11 +587,7 @@ module msu_apf #(
           msu_data_download <= 0;
           audio_download <= 0;
           if (op == OP_PROBE) msu_busy <= 0;
-          if (op == OP_DATA) begin
-            win_end <= win_end + read_length;
-            if (win_end + read_length - win_start > RING_SIZE - STREAM_GUARD)
-              win_start <= win_end + read_length - (RING_SIZE - STREAM_GUARD);
-          end
+          if (op == OP_DATA) win_end <= win_end + read_length;
           state <= S_IDLE;
         end
       end

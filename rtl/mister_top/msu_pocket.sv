@@ -135,13 +135,16 @@ module msu_sdram_store #(
 );
   // Bridge words waiting for their two SNI writes. While streaming, the reader's prefetch
   // goes first, so words can queue up behind it; data_loader-style backpressure is impossible.
+  // Registered read so it maps to block RAM; the head is usable one cycle after it lands
   reg [53:0] wq[0:7];  // {word address [23:2], data}
+  reg [53:0] wq_q = 0;
   reg [2:0] wq_wp = 0;
   reg [2:0] wq_rp = 0;
   reg [3:0] wq_count = 0;
+  reg wq_was_nonempty = 0;
   reg wq_half = 0;  // 1 once the low half of the head word is written
-  wire [21:0] pend_waddr = wq[wq_rp][53:32];
-  wire [31:0] pend_data = wq[wq_rp][31:0];
+  wire [21:0] pend_waddr = wq_q[53:32];
+  wire [31:0] pend_data = wq_q[31:0];
 
   // Word addresses wrap at the ring size
   localparam [22:0] WORD_MASK = (23'd1 << (RING_BITS - 1)) - 1'd1;
@@ -189,16 +192,19 @@ module msu_sdram_store #(
   // The reader crossed into the prefetched word: shift it in and fetch the one after
   wire prefetch_go = st == ST_IDLE && !msu_data_download && !seek_active && next_valid
       && rd_word == wrap(cur_word + 1'd1);
-  wire write_next = st == ST_IDLE && wq_count != 0 && !prefetch_go;
+  wire write_next = st == ST_IDLE && wq_count != 0 && wq_was_nonempty && !prefetch_go;
   wire load_accept = (msu_data_download || stream_mode) && load_valid;
+
+  always @(posedge clk_sys) begin
+    if (load_accept && wq_count != 4'd8) wq[wq_wp] <= {load_addr[23:2], load_data};
+    wq_q <= wq[wq_rp];
+    wq_was_nonempty <= wq_count != 0;
+  end
 
   always @(posedge clk_sys) begin
     if (load_accept) begin
       if (wq_count == 4'd8) load_overflow <= 1;
-      else begin
-        wq[wq_wp] <= {load_addr[23:2], load_data};
-        wq_wp <= wq_wp + 1'd1;
-      end
+      else wq_wp <= wq_wp + 1'd1;
     end
 
     // A seek can start while a prefetch is in flight; remember it until ST_IDLE
