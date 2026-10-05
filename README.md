@@ -98,6 +98,7 @@ Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small sq
 | Red | A request is waiting and the Pocket has not picked it up |
 | Magenta | The Pocket never acknowledged the core at startup |
 | White | Streamed `.msu` data was lost (stays white until the next boot) |
+| Orange | The game read past the streamed data: the SD card did not keep up (stays orange until the next boot) |
 
 CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.
 

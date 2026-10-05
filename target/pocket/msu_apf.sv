@@ -78,6 +78,7 @@ module msu_apf #(
     // Streaming (.msu larger than DATA_MAX_SIZE): seek request toggle + offset in, response
     // once STREAM_LEAD bytes past it are in SDRAM; the reader's position on request
     output reg stream_mode = 0,
+    output reg stream_underrun = 0,  // diagnostic: the game read past the buffered data
     input wire data_seek_req_toggle,
     input wire [31:0] data_seek_addr,
     output reg data_seek_resp_toggle = 0,
@@ -310,6 +311,7 @@ module msu_apf #(
       msu_busy <= 1;
       msu_enable <= 0;
       stream_mode <= 0;
+      stream_underrun <= 0;
       probe_status <= 0;
     end
 
@@ -375,6 +377,7 @@ module msu_apf #(
         state <= S_IDLE;
         if (stream_base_w > win_end) begin
           // The reader got past the window: refill from where it is
+          if (!seek_waiting) stream_underrun <= 1;
           win_start <= stream_base_w;
           win_end <= stream_base_w;
         end else if (win_end - stream_base_w < STREAM_AHEAD) begin  // STREAM_AHEAD < ring size

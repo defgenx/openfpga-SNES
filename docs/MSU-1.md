@@ -71,6 +71,7 @@ Square 2 (x 72-103) shows `core_bridge_cmd`'s target command handshake:
 | Green | Idle, the last command was answered |
 | Blue | Idle, no command answered yet |
 | White | Streamed `.msu` data was lost: the SDRAM write queue overflowed (stays white) |
+| Orange | Stream underrun: the game read past `win_end` (stays orange) |
 
 `sim/overlay/tb_overlay.sv` checks the squares' placement behind `scanline_filler`.
 

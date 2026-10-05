@@ -684,6 +684,7 @@ module core_top (
   wire [21:0] msu_sector_req_num;
 
   wire msu_stream_mode;
+  wire msu_stream_underrun;
   wire msu_data_seek_req_toggle;
   wire [31:0] msu_data_seek_addr;
   wire msu_data_seek_resp_toggle;
@@ -734,6 +735,7 @@ module core_top (
       .sector_num(msu_sector_req_num),
 
       .stream_mode(msu_stream_mode),
+      .stream_underrun(msu_stream_underrun),
       .data_seek_req_toggle(msu_data_seek_req_toggle),
       .data_seek_addr(msu_data_seek_addr),
       .data_seek_resp_toggle(msu_data_seek_resp_toggle),
@@ -1170,11 +1172,12 @@ module core_top (
   wire cmd_dbg_seen_ok_s;
   wire msu_debug_squares_s;
   wire msu_load_overflow_s;
+  wire msu_stream_underrun_s;
   synch_3 #(
-      .WIDTH(12)
+      .WIDTH(13)
   ) msu_dbg_sync (
-      {msu_load_overflow, msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
-      {msu_load_overflow_s, msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
+      {msu_stream_underrun, msu_load_overflow, msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
+      {msu_stream_underrun_s, msu_load_overflow_s, msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
       clk_video_5_37
   );
 
@@ -1190,6 +1193,7 @@ module core_top (
       .seen_busy(cmd_dbg_seen_busy_s),
       .seen_ok(cmd_dbg_seen_ok_s),
       .load_overflow(msu_load_overflow_s),
+      .stream_underrun(msu_stream_underrun_s),
       .on(msu_overlay_on),
       .rgb(msu_overlay_rgb)
   );

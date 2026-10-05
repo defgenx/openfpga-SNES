@@ -176,6 +176,7 @@ module tb_msu;
   wire [31:0] track_size;
   wire [21:0] sector_num;
 
+  wire stream_underrun;
   wire stream_mode, seek_req_t, seek_resp_t, pos_req_t, pos_ack_t;
   wire [31:0] seek_addr, pos_value;
 
@@ -222,6 +223,7 @@ module tb_msu;
       .sector_req_toggle(sector_req_toggle),
       .sector_num(sector_num),
       .stream_mode(stream_mode),
+      .stream_underrun(stream_underrun),
       .data_seek_req_toggle(seek_req_t),
       .data_seek_addr(seek_addr),
       .data_seek_resp_toggle(seek_resp_t),
@@ -825,6 +827,10 @@ module tb_msu;
 
     if (load_overflow) begin
       $display("FAIL: store write queue overflowed");
+      errors = errors + 1;
+    end
+    if (stream_underrun) begin
+      $display("FAIL: stream underrun");
       errors = errors + 1;
     end
     if (errors == 0) $display("PASS (LITTLE=%0d HAVE_MSU=%0d)", LITTLE, HAVE_MSU);

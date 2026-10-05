@@ -47,6 +47,7 @@ module tb_overlay;
       .seen_busy(1'b0),
       .seen_ok(1'b1),
       .load_overflow(1'b0),
+      .stream_underrun(1'b0),
       .on(on),
       .rgb(orgb)
   );
