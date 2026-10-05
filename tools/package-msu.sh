@@ -5,6 +5,7 @@
 #   tools/package-msu.sh [--build] [--build-pal] [--build-spc] [--rbf F] [--rbf-pal F] [--rbf-spc F]
 #
 #   --build / --build-pal / --build-spc   compile that bitstream with Quartus 21.1 in Docker (slow)
+#   --release                             compile without the MSU-1 debug overlay
 #   --rbf / --rbf-pal / --rbf-spc FILE    use an existing snes_pocket.rbf for that variant
 #
 # Without either, the last build output in build/msu-test/ is used. Bitstreams left out of
@@ -20,18 +21,20 @@ WORK="$REPO/build/msu-test"
 PKG="$REPO/build/msu-package"
 ZIP="$REPO/release/$CORE_DIR.zip"
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 # Plain variables per variant: macOS ships bash 3.2, without associative arrays
 RBF_ntsc=""
 RBF_pal=""
 RBF_ntsc_spc=""
 BUILDS=()
+RELEASE_ARG=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--build) BUILDS+=(ntsc) ;;
 		--build-pal) BUILDS+=(pal) ;;
 		--build-spc) BUILDS+=(ntsc_spc) ;;
+		--release) RELEASE_ARG=release ;;
 		--rbf) RBF_ntsc=$2; shift ;;
 		--rbf-pal) RBF_pal=$2; shift ;;
 		--rbf-spc) RBF_ntsc_spc=$2; shift ;;
@@ -49,7 +52,7 @@ build() { # <generate.tcl variant>
 	sed -i.bak 's/NUM_PARALLEL_PROCESSORS 4/NUM_PARALLEL_PROCESSORS 1/' "$src/projects/snes_pocket.qsf"
 	echo "Building $1 (this takes a long time)..."
 	docker run --rm --platform linux/amd64 -v "$src":/build -w /build "$QUARTUS_IMAGE" \
-		quartus_sh -t generate.tcl "$1" > "$WORK/build_$1.log" 2>&1 \
+		quartus_sh -t generate.tcl "$1" $RELEASE_ARG > "$WORK/build_$1.log" 2>&1 \
 		|| { tail -30 "$WORK/build_$1.log"; echo "build failed, see $WORK/build_$1.log" >&2; exit 1; }
 	grep -m1 "Logic utilization" "$src/projects/output_files/snes_pocket.fit.summary" || true
 	cp "$src/projects/output_files/snes_pocket.rbf" "$WORK/$1.rbf"

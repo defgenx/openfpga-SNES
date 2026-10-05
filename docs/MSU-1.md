@@ -73,7 +73,13 @@ Square 2 (x 72-103) shows `core_bridge_cmd`'s target command handshake:
 | White | Streamed `.msu` data was lost: the SDRAM write queue overflowed (stays white) |
 | Orange | Stream underrun: the game read past `win_end` (stays orange) |
 
-`sim/overlay/tb_overlay.sv` checks the squares' placement behind `scanline_filler`.
+While streaming, a bar (y 72-79, x 32-95) shows `stream_fill`: the bytes between the reader and
+`win_end`, in 1/64ths of `STREAM_AHEAD`, sampled at each fetch decision.
+
+The overlay is compiled in when `core_top`'s `MSU_DEBUG` parameter is 1. That is the default;
+`generate.tcl <variant> release` sets it to 0, and the unused diagnostic logic is then pruned.
+
+`sim/overlay/tb_overlay.sv` checks the squares' placement and the bar behind `scanline_filler`.
 
 ## CPU turbo
 

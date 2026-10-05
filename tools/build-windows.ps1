@@ -12,6 +12,7 @@
     .\tools\build-windows.ps1 -Variants ntsc      # only NTSC; the others are left out of the zip
     .\tools\build-windows.ps1 -PackageOnly        # re-package the last build\msu-test\*.rbf
     .\tools\build-windows.ps1 -Install            # also run the installer afterwards
+    .\tools\build-windows.ps1 -Release            # build without the MSU-1 debug overlay
     .\tools\build-windows.ps1 -Quartus C:\intelFPGA_lite\21.1\quartus\bin64
 #>
 [CmdletBinding()]
@@ -20,6 +21,7 @@ param(
     [string[]]$Variants = @("ntsc", "pal", "ntsc_spc"),
     [string]$Quartus = "",
     [switch]$PackageOnly,
+    [switch]$Release,
     [switch]$Install
 )
 
@@ -63,7 +65,7 @@ if (-not $PackageOnly) {
             $log = Join-Path $Work "build_$v.log"
             Write-Host "Building $v (log: $log)..."
             $t = Get-Date
-            & $sh -t generate.tcl $v *> $log
+            if ($Release) { & $sh -t generate.tcl $v release *> $log } else { & $sh -t generate.tcl $v *> $log }
             if ($LASTEXITCODE -ne 0) { Get-Content $log -Tail 30; Fail "$v build failed, see $log" }
             $summary = Join-Path $Repo "projects/output_files/snes_pocket.fit.summary"
             Select-String -Path $summary -Pattern "Logic utilization" | ForEach-Object { Write-Host "  $($_.Line.Trim())" }

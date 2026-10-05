@@ -1,6 +1,6 @@
-// MSU-1 diagnostic overlay for test builds: two 32x32 squares near the top-left corner, see
-// docs/MSU-1.md for the colours. Square 1 (x 32-63) is the boot probe result, square 2
-// (x 72-103) the APF target command handshake.
+// MSU-1 diagnostic overlay for debug builds, see docs/MSU-1.md for the colours. Square 1
+// (x 32-63) is the boot probe result, square 2 (x 72-103) the APF target command handshake,
+// and while streaming a bar (y 72-79) shows how far the stream is ahead of the game.
 module msu_overlay (
     input wire clk,
     input wire de,
@@ -11,6 +11,8 @@ module msu_overlay (
     input wire seen_ok,
     input wire load_overflow,  // the store's write queue overflowed (streaming)
     input wire stream_underrun,  // the game read past the streamed data
+    input wire stream_mode,
+    input wire [5:0] stream_fill,  // streamed bytes ahead of the game, 63 = full read-ahead
     output wire on,
     output wire [23:0] rgb
 );
@@ -34,7 +36,11 @@ module msu_overlay (
   wire msu_overlay_row = msu_overlay_y >= 32 && msu_overlay_y < 64;
   wire msu_square1 = msu_overlay_row && msu_overlay_x >= 32 && msu_overlay_x < 64;
   wire msu_square2 = msu_overlay_row && msu_overlay_x >= 72 && msu_overlay_x < 104;
-  assign on = msu_square1 || msu_square2;
+  // Fill bar (y 72-79, x 32-95) while streaming: green up to the read-ahead level
+  wire msu_bar = stream_mode && msu_overlay_y >= 72 && msu_overlay_y < 80 && msu_overlay_x >= 32
+      && msu_overlay_x < 96;
+  wire msu_bar_fill = msu_overlay_x - 9'd32 <= {3'b0, stream_fill};
+  assign on = msu_square1 || msu_square2 || msu_bar;
 
   reg [23:0] msu_probe_rgb;
   always @(*) begin
@@ -64,5 +70,6 @@ module msu_overlay (
     else msu_handshake_rgb = 24'h0000FF;  // idle, no command answered yet
   end
 
-  assign rgb = msu_square1 ? msu_probe_rgb : msu_handshake_rgb;
+  assign rgb = msu_square1 ? msu_probe_rgb : msu_square2 ? msu_handshake_rgb
+      : msu_bar_fill ? 24'h00FF00 : 24'h202020;
 endmodule

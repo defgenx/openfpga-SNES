@@ -6,12 +6,20 @@ package require ::quartus::project
 # Required for compilation
 package require ::quartus::flow
 
-if { $argc != 1 } {
-  puts "Exactly 1 argument required"
+# Optional second argument "release": build without the MSU-1 debug overlay
+if { $argc < 1 || $argc > 2 } {
+  puts "Usage: generate.tcl <variant> \[release\]"
   exit
 }
 
 project_open projects/snes_pocket.qpf
+
+if { $argc == 2 && [lindex $argv 1] == "release" } {
+  puts "Release build: MSU-1 debug overlay off"
+  set_parameter -name MSU_DEBUG -entity core_top '0
+} else {
+  set_parameter -name MSU_DEBUG -entity core_top '1
+}
 
 if { [lindex $argv 0] == "ntsc" } {
   puts "NTSC"

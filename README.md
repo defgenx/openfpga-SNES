@@ -70,7 +70,7 @@ The **Region / Refresh** setting (Auto, NTSC 60Hz or PAL 50Hz) overrides the reg
 
 ##### Troubleshooting MSU-1
 
-Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small squares near the top-left corner of the picture. They are off by default, and stay on while the setting is on.
+Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small squares near the top-left corner of the picture. They are off by default, and stay on while the setting is on. While a large `.msu` streams, a bar under them shows how far the stream is ahead of the game: full is 256KB buffered, empty means the game is reading data as soon as it arrives. Release builds (`generate.tcl <variant> release`, `tools/package-msu.sh --release`, `tools/build-windows.ps1 -Release`) leave the squares out to save FPGA space.
 
 **Left square: MSU-1 detection at boot**
 

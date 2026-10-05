@@ -685,6 +685,7 @@ module core_top (
 
   wire msu_stream_mode;
   wire msu_stream_underrun;
+  wire [5:0] msu_stream_fill;
   wire msu_data_seek_req_toggle;
   wire [31:0] msu_data_seek_addr;
   wire msu_data_seek_resp_toggle;
@@ -736,6 +737,7 @@ module core_top (
 
       .stream_mode(msu_stream_mode),
       .stream_underrun(msu_stream_underrun),
+      .stream_fill(msu_stream_fill),
       .data_seek_req_toggle(msu_data_seek_req_toggle),
       .data_seek_addr(msu_data_seek_addr),
       .data_seek_resp_toggle(msu_data_seek_resp_toggle),
@@ -838,6 +840,8 @@ module core_top (
   reg use_square_pixels = 0;
   // PAL clock bitstream (set by generate.tcl); declared before its first use below
   parameter PAL_PLL = 1'b0;
+  // MSU-1 debug overlay; generate.tcl's "release" option builds without it
+  parameter MSU_DEBUG = 1'b1;
 
   reg msu_debug_squares = 0;
   // Region setting: 0 = from the ROM header (the loader's PAL), 1 = NTSC, 2 = PAL. Only the
@@ -1173,30 +1177,41 @@ module core_top (
   wire msu_debug_squares_s;
   wire msu_load_overflow_s;
   wire msu_stream_underrun_s;
+  wire msu_stream_mode_s;
+  wire [5:0] msu_stream_fill_s;
   synch_3 #(
-      .WIDTH(13)
+      .WIDTH(20)
   ) msu_dbg_sync (
-      {msu_stream_underrun, msu_load_overflow, msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
-      {msu_stream_underrun_s, msu_load_overflow_s, msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
+      {msu_stream_fill, msu_stream_mode, msu_stream_underrun, msu_load_overflow, msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
+      {msu_stream_fill_s, msu_stream_mode_s, msu_stream_underrun_s, msu_load_overflow_s, msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
       clk_video_5_37
   );
 
   wire msu_overlay_on;
   wire [23:0] msu_overlay_rgb;
 
-  msu_overlay msu_overlay (
-      .clk(clk_video_5_37),
-      .de(de_out),
-      .vsync(video_vs),
-      .probe_status(msu_probe_status_s),
-      .tstate(cmd_dbg_tstate_s),
-      .seen_busy(cmd_dbg_seen_busy_s),
-      .seen_ok(cmd_dbg_seen_ok_s),
-      .load_overflow(msu_load_overflow_s),
-      .stream_underrun(msu_stream_underrun_s),
-      .on(msu_overlay_on),
-      .rgb(msu_overlay_rgb)
-  );
+  generate
+    if (MSU_DEBUG) begin : msu_debug
+      msu_overlay msu_overlay (
+          .clk(clk_video_5_37),
+          .de(de_out),
+          .vsync(video_vs),
+          .probe_status(msu_probe_status_s),
+          .tstate(cmd_dbg_tstate_s),
+          .seen_busy(cmd_dbg_seen_busy_s),
+          .seen_ok(cmd_dbg_seen_ok_s),
+          .load_overflow(msu_load_overflow_s),
+          .stream_underrun(msu_stream_underrun_s),
+          .stream_mode(msu_stream_mode_s),
+          .stream_fill(msu_stream_fill_s),
+          .on(msu_overlay_on),
+          .rgb(msu_overlay_rgb)
+      );
+    end else begin : msu_no_debug
+      assign msu_overlay_on = 0;
+      assign msu_overlay_rgb = 0;
+    end
+  endgenerate
 
 
   sound_i2s #(

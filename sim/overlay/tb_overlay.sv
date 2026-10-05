@@ -48,6 +48,8 @@ module tb_overlay;
       .seen_ok(1'b1),
       .load_overflow(1'b0),
       .stream_underrun(1'b0),
+      .stream_mode(1'b1),
+      .stream_fill(6'd20),
       .on(on),
       .rgb(orgb)
   );
@@ -84,7 +86,8 @@ module tb_overlay;
       if (frames == 3) begin
         $display("frame: red=%0d px x %0d..%0d y %0d..%0d, green=%0d px, lines=%0d", red, minx, maxx, miny, maxy,
                  green, oy);
-        if (red == 32 * 32 && minx == 32 && maxx == 63 && green == 32 * 32) $display("PASS");
+        // green: square 2 plus the fill bar at 20 (21 px x 8 lines)
+        if (red == 32 * 32 && minx == 32 && maxx == 63 && green == 32 * 32 + 21 * 8) $display("PASS");
         else $display("FAIL");
         $finish;
       end

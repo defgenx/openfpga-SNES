@@ -79,6 +79,7 @@ module msu_apf #(
     // once STREAM_LEAD bytes past it are in SDRAM; the reader's position on request
     output reg stream_mode = 0,
     output reg stream_underrun = 0,  // diagnostic: the game read past the buffered data
+    output reg [5:0] stream_fill = 0,  // diagnostic: buffered bytes past the reader, in STREAM_AHEAD/64
     input wire data_seek_req_toggle,
     input wire [31:0] data_seek_addr,
     output reg data_seek_resp_toggle = 0,
@@ -375,6 +376,9 @@ module msu_apf #(
 
       S_FETCH: begin
         state <= S_IDLE;
+        stream_fill <= stream_base_w > win_end ? 6'd0
+            : win_end - stream_base_w >= STREAM_AHEAD ? 6'd63
+            : 6'((win_end - stream_base_w) >> ($clog2(STREAM_AHEAD) - 6));
         if (stream_base_w > win_end) begin
           // The reader got past the window: refill from where it is
           if (!seek_waiting) stream_underrun <= 1;
