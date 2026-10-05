@@ -64,10 +64,6 @@ To try it without touching the regular core, install the test build as a separat
 
 MSU-1 is enabled when `<rom>.msu` exists. A data file up to 16MB is copied to memory at boot (expect a short black screen for large ones). A larger one, such as an FMV game's video, is streamed from the SD card while the game plays. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
 
-##### Region / Refresh
-
-The **Region / Refresh** setting (Auto, NTSC 60Hz or PAL 50Hz) overrides the region and refresh rate the ROM header asks for; on the SNES they are one signal. A change takes effect on the next game load or **Reset Core**. The loader still picks the NTSC or PAL bitstream from the header before the core starts, so a forced region runs on the other region's clock, about 0.9% fast or slow.
-
 ##### Troubleshooting MSU-1
 
 Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small squares near the top-left corner of the picture. They are off by default, and stay on while the setting is on. While a large `.msu` streams, a bar under them shows how far the stream is ahead of the game: full is 256KB buffered, empty means the game is reading data as soon as it arrives. Release builds (`generate.tcl <variant> release`, `tools/package-msu.sh --release`, `tools/build-windows.ps1 -Release`) leave the squares out to save FPGA space.

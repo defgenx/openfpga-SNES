@@ -98,7 +98,10 @@ and the game then reads it from SDRAM. A larger one, e.g. Super Road Blaster's v
 streamed:
 
 - **Ring and windows:** SDRAM banks 2-3 become a ring, split into two 8MB regions, one per
-  window. Offsets are 30 bits, so files up to 1GB, as on MiSTer. The *active* window holds file
+  window. Offsets are 30 bits, so files up to 1GB, as on MiSTer. Windows are tracked in 1KB
+  pages, which keeps `msu_apf`'s comparators narrow (it is near the FPGA's size limit); a new
+  window starts on the seek's page, and only the file's last read is shorter than a page
+  multiple. The *active* window holds file
   bytes `[win_start, win_end)` in SDRAM, with `[win_end, fetch_end)` being read and copied, and
   is read ahead. The *parked* window keeps `[park_start, park_end)` from the window the game
   left. Super Road Blaster seeks every frame between a chapter's frame table and the frame
@@ -110,7 +113,8 @@ streamed:
     region.
 
   Switching windows waits for chunks being copied. The seek completes, and MSU-1's data busy
-  bit clears, once `STREAM_LEAD` (4KB) past it is in SDRAM; `seek_region` tells the store which
+  bit clears, once at least `STREAM_LEAD` (4KB) past it is in SDRAM (the first read is 5KB from
+  the seek's page); `seek_region` tells the store which
   region the reader is now in. The game allows about 30ms per seek: it polls MSU_STATUS `$2000`
   times (`MSU1_SEEK_TIMEOUT` in its source).
 - **Reader position:** `msu_apf` polls it (`pos_req_toggle`) to decide on read-ahead. `MSU.sv`

@@ -283,8 +283,9 @@ module msu_apf #(
   reg [31:0] slot_size;
   reg [1:0] dt_wait;
 
-  reg [31:0] read_offset;
+  reg [21:0] read_page;  // reads start on a 1KB page: .pcm sectors and stream chunks alike
   reg [13:0] read_length;  // chunks and .pcm sectors are at most 8KB
+  wire [31:0] read_offset = {read_page, 10'b0};
   reg [9:0] drain;
 
   wire [15:0] opened_slot = op == OP_PROBE || op == OP_DATA ? DATA_SLOT_ID : AUDIO_SLOT_ID;
@@ -297,41 +298,51 @@ module msu_apf #(
   // and being copied, and is read ahead. The parked one keeps [park_start, park_end) from
   // the last window the game left: Super Road Blaster alternates between a chapter's frame
   // table and frame data every frame, so both stay buffered.
-  // .msu offsets are 30 bits: files up to 1GB, MiSTer's limit too
+  // .msu offsets are 30 bits: files up to 1GB, MiSTer's limit too. Windows are kept in 1KB
+  // pages (PW bits); data_pages rounds the file up, data_size_lo gives the last read's length
   localparam OB = 30;
-  localparam [31:0] REGION_SIZE = RING_SIZE >> 1;
-  reg [OB-1:0] data_size = 0;
-  reg [OB-1:0] win_start = 0;
-  reg [OB-1:0] win_end = 0;
-  reg [OB-1:0] fetch_end = 0;
-  reg [OB-1:0] park_start = 0;
-  reg [OB-1:0] park_end = 0;  // empty when equal to park_start
+  localparam PW = OB - 10;
+  localparam [31:0] REGION_PAGES = RING_SIZE >> 11;
+  localparam [31:0] GUARD_PAGES = STREAM_GUARD >> 10;
+  localparam [31:0] AHEAD_PAGES = STREAM_AHEAD >> 10;
+  localparam [31:0] CHUNK_PAGES = STREAM_CHUNK >> 10;
+  // The window starts on the seek's page, so one more page keeps STREAM_LEAD past the seek
+  localparam [31:0] LEAD_PAGES = (STREAM_LEAD >> 10) + 1;
+  reg [PW-1:0] data_pages = 0;
+  reg [13:0] data_size_lo = 0;
+  reg [PW-1:0] win_start = 0;
+  reg [PW-1:0] win_end = 0;
+  reg [PW-1:0] fetch_end = 0;
+  reg [PW-1:0] park_start = 0;
+  reg [PW-1:0] park_end = 0;  // empty when equal to park_start
   reg act_region = 0;
   reg [1:0] copy_outstanding = 0;  // per bank: read issued, chunk not yet in SDRAM
-  reg [13:0] pend_len0 = 0;
-  reg [13:0] pend_len1 = 0;
+  reg [3:0] pend_pages0 = 0;
+  reg [3:0] pend_pages1 = 0;
   reg cur_bank = 0;  // bank the next .msu read fills
   reg done_bank = 0;  // bank whose copy completes next (chunks complete in order)
   wire any_outstanding = |copy_outstanding;
   wire bank_free = !copy_outstanding[cur_bank];
   wire done_bank_copied = done_bank ? copy_done1_s[2] == copy_req_toggle[1]
       : copy_done0_s[2] == copy_req_toggle[0];
-  reg [OB-1:0] seek_target = 0;
+  reg [PW-1:0] seek_target = 0;
   reg seek_waiting = 0;
-  wire [OB-1:0] stream_base = seek_waiting ? seek_target : pos_value[OB-1:0];
-  wire [OB-1:0] stream_base_w = {stream_base[OB-1:2], 2'b00};  // the window is word-aligned
-  wire [OB-1:0] stream_left = data_size - fetch_end;
-  wire [OB-1:0] seek_addr = data_seek_addr[OB-1:0];
+  wire [PW-1:0] stream_base = seek_waiting ? seek_target : pos_value[OB-1:10];
+  wire [PW-1:0] stream_left = data_pages - fetch_end;
+  wire [PW-1:0] seek_addr = data_seek_addr[OB-1:10];
   // Seeks get a short read so they complete quickly; read-ahead and the boot copy use chunks
-  wire [13:0] chunk_limit = seek_waiting && !preloading ? STREAM_LEAD[13:0] : STREAM_CHUNK[13:0];
-  wire [13:0] chunk_length = stream_left < chunk_limit ? stream_left[13:0] : chunk_limit;
+  wire [3:0] chunk_limit = seek_waiting && !preloading ? LEAD_PAGES[3:0] : CHUNK_PAGES[3:0];
+  wire last_chunk = stream_left <= chunk_limit;
+  wire [3:0] chunk_pages = last_chunk ? stream_left[3:0] : chunk_limit;
+  // The last read stops at the file's end; it is under 16KB, so 14 bits of the difference do
+  wire [13:0] chunk_length = last_chunk ? data_size_lo - {fetch_end[3:0], 10'b0} : {chunk_limit, 10'b0};
   assign copy_base = read_offset;
   assign copy_len = read_length;
-  // Bytes up to REGION_SIZE - STREAM_GUARD behind a window's end are still in its region
+  // Pages up to REGION_PAGES - GUARD_PAGES behind a window's end are still in its region
   wire seek_restart = seek_addr < win_start || seek_addr >= fetch_end
-      || fetch_end - seek_addr >= REGION_SIZE - STREAM_GUARD;
+      || fetch_end - seek_addr >= REGION_PAGES - GUARD_PAGES;
   wire seek_in_parked = seek_addr >= park_start && seek_addr < park_end
-      && park_end - seek_addr < REGION_SIZE - STREAM_GUARD;
+      && park_end - seek_addr < REGION_PAGES - GUARD_PAGES;
   assign copy_region = act_region;
   assign seek_region = act_region;
 
@@ -343,7 +354,6 @@ module msu_apf #(
       : DATA_BRIDGE_ADDR + {cur_bank, 13'b0};
   assign target_dataslot_length = read_length;
   wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], struct_little)+:8];
-  wire [31:0] sector_offset = {sector_num, 10'b0};
   // Full sectors, then the remainder, then nothing past the end
   wire [21:0] last_sector = track_size[31:10];
   wire [10:0] sector_length = sector_num < last_sector ? 11'd1024
@@ -381,7 +391,7 @@ module msu_apf #(
 
     // A chunk reached SDRAM. The other win_end writers below require !any_outstanding
     if (copy_outstanding[done_bank] && done_bank_copied) begin
-      win_end <= win_end + (done_bank ? pend_len1 : pend_len0);
+      win_end <= win_end + (done_bank ? pend_pages1 : pend_pages0);
       copy_outstanding[done_bank] <= 0;
       done_bank <= ~done_bank;
     end
@@ -407,7 +417,7 @@ module msu_apf #(
         end else if (msu_enable && sector_pending) begin
           sector_req_seen <= sector_req_s[2];
           op <= OP_SECTOR;
-          read_offset <= sector_offset;
+          read_page <= sector_num;
           read_length <= sector_length;
           audio_download <= 1;
           drain <= 0;
@@ -428,16 +438,16 @@ module msu_apf #(
               win_end <= park_end;
               fetch_end <= park_end;
             end else begin
-              win_start <= {seek_addr[OB-1:2], 2'b00};
-              win_end <= {seek_addr[OB-1:2], 2'b00};
-              fetch_end <= {seek_addr[OB-1:2], 2'b00};
+              win_start <= seek_addr;
+              win_end <= seek_addr;
+              fetch_end <= seek_addr;
             end
           end
         end else if (stream_mode && seek_waiting
-            && (win_end >= seek_target + STREAM_LEAD || win_end >= data_size)) begin
+            && (win_end >= seek_target + LEAD_PAGES[PW-1:0] || win_end >= data_pages)) begin
           seek_waiting <= 0;
           data_seek_resp_toggle <= data_seek_seen;
-        end else if (stream_mode && bank_free && fetch_end < data_size) begin
+        end else if (stream_mode && bank_free && fetch_end < data_pages) begin
           // Ask where the reader is, then decide whether to fetch the next chunk
           pos_req_toggle <= ~pos_req_toggle;
           state <= S_POS_WAIT;
@@ -457,26 +467,26 @@ module msu_apf #(
 
       S_FETCH_GO: begin
         state <= S_IDLE;
-        stream_fill <= stream_base_w > win_end ? 6'd0
-            : win_end - stream_base_w >= STREAM_AHEAD ? 6'd63
-            : 6'((win_end - stream_base_w) >> ($clog2(STREAM_AHEAD) - 6));
-        if (stream_base_w > win_end && !seek_waiting) stream_underrun <= 1;
-        if (stream_base_w > fetch_end) begin
+        stream_fill <= stream_base > win_end ? 6'd0
+            : win_end - stream_base >= AHEAD_PAGES ? 6'd63
+            : 6'((win_end - stream_base) >> ($clog2(AHEAD_PAGES) - 6));
+        if (stream_base > win_end && !seek_waiting) stream_underrun <= 1;
+        if (stream_base > fetch_end) begin
           // The reader got past everything fetched: refill from where it is, once the chunk
           // being copied is in
           if (!any_outstanding) begin
-            win_start <= stream_base_w;
-            win_end <= stream_base_w;
-            fetch_end <= stream_base_w;
+            win_start <= stream_base;
+            win_end <= stream_base;
+            fetch_end <= stream_base;
           end
-        end else if (fetch_end - stream_base_w < STREAM_AHEAD && bank_free) begin  // < ring size
+        end else if (fetch_end - stream_base < AHEAD_PAGES && bank_free) begin  // < ring size
           op <= OP_DATA;
-          read_offset <= {{(32 - OB) {1'b0}}, fetch_end};
+          read_page <= fetch_end;
           read_length <= chunk_length;
           copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
           copy_outstanding[cur_bank] <= 1;
-          if (cur_bank) pend_len1 <= chunk_length;
-          else pend_len0 <= chunk_length;
+          if (cur_bank) pend_pages1 <= chunk_pages;
+          else pend_pages0 <= chunk_pages;
           drain <= 0;
           state <= S_READ;
         end
@@ -636,7 +646,9 @@ module msu_apf #(
           else if (cmd_err == 3'd2) probe_status <= 4'd8;  // slot undefined
           else if (cmd_err == 3'd5) probe_status <= 4'd9;  // general error
           else probe_status <= 4'd10;
-          data_size <= slot_size[31:OB] != 0 ? {{(OB - 2) {1'b1}}, 2'b00} : slot_size[OB-1:0];
+          data_pages <= slot_size[31:OB] != 0 || &slot_size[OB-1:10] ? {PW{1'b1}}
+              : slot_size[OB-1:10] + (|slot_size[9:0]);
+          data_size_lo <= slot_size[31:OB] != 0 || &slot_size[OB-1:10] ? 14'h3C00 : slot_size[13:0];
           win_start <= 0;
           win_end <= 0;
           fetch_end <= 0;
@@ -680,7 +692,7 @@ module msu_apf #(
 
       // Boot copy of a small .msu: chunk by chunk through the bounce buffer
       S_PRELOAD: begin
-        if (fetch_end >= data_size) begin
+        if (fetch_end >= data_pages) begin
           if (!any_outstanding) begin
             preloading <= 0;
             msu_data_download <= 0;
@@ -689,12 +701,12 @@ module msu_apf #(
           end
         end else if (bank_free) begin
           op <= OP_DATA;
-          read_offset <= {{(32 - OB) {1'b0}}, fetch_end};
+          read_page <= fetch_end;
           read_length <= chunk_length;
           copy_req_toggle[cur_bank] <= ~copy_req_toggle[cur_bank];
           copy_outstanding[cur_bank] <= 1;
-          if (cur_bank) pend_len1 <= chunk_length;
-          else pend_len0 <= chunk_length;
+          if (cur_bank) pend_pages1 <= chunk_pages;
+          else pend_pages0 <= chunk_pages;
           drain <= 0;
           state <= S_READ;
         end
@@ -714,7 +726,7 @@ module msu_apf #(
           end else if (op == OP_DATA) begin
             // The bank is filled; its copy finishes on its own, so move to the other bank
             fill_done_toggle[cur_bank] <= ~fill_done_toggle[cur_bank];
-            fetch_end <= fetch_end + read_length;
+            fetch_end <= fetch_end + (cur_bank ? pend_pages1 : pend_pages0);
             cur_bank <= ~cur_bank;
             state <= preloading ? S_PRELOAD : S_IDLE;
           end else state <= S_IDLE;

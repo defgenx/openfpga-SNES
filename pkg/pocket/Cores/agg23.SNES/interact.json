@@ -139,30 +139,6 @@
         "value": 1
       },
       {
-        "name": "Region / Refresh",
-        "id": 51,
-        "type": "list",
-        "enabled": true,
-        "address": "0x304",
-        "persist": true,
-        "writeonly": true,
-        "defaultval": 0,
-        "options": [
-          {
-            "name": "Auto",
-            "value": 0
-          },
-          {
-            "name": "NTSC 60Hz",
-            "value": 1
-          },
-          {
-            "name": "PAL 50Hz",
-            "value": 2
-          }
-        ]
-      },
-      {
         "name": "MSU-1 Debug Squares",
         "id": 50,
         "type": "check",

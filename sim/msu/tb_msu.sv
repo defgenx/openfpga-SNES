@@ -209,7 +209,7 @@ module tb_msu;
       .TIMEOUT_BITS(26),
       .RING_BITS(RING_BITS),
       .DATA_MAX_SIZE(4096),
-      .STREAM_CHUNK(SRB || VIDEO ? 8192 : 512),
+      .STREAM_CHUNK(SRB || VIDEO ? 8192 : 1024),
       .STREAM_LEAD(SRB || VIDEO ? 4096 : 1024),
       .STREAM_GUARD(SRB || VIDEO ? 8192 : 1024),
       .STREAM_AHEAD(VIDEO ? 49152 : SRB ? 16384 : 2048)
@@ -721,13 +721,13 @@ module tb_msu;
     if (SRB && dut_apf.state == 0 && dut_apf.stream_mode && dut_apf.data_seek_pending
         && !(dut_apf.seek_restart && dut_apf.any_outstanding) && seek_log < 40) begin
       seek_log = seek_log + 1;
-      $display("[%0t] SEEK %0d: %s active=%0d..%0d/%0d parked=%0d..%0d", $time, dut_apf.seek_addr,
+      $display("[%0t] SEEK page %0d: %s active pages=%0d..%0d/%0d parked=%0d..%0d", $time, dut_apf.seek_addr,
                !dut_apf.seek_restart ? "keep" : dut_apf.seek_in_parked ? "swap" : "restart",
                dut_apf.win_start, dut_apf.win_end, dut_apf.fetch_end, dut_apf.park_start, dut_apf.park_end);
     end
   always @(posedge dut_apf.stream_underrun)
-    $display("[%0t] UNDERRUN base=%0d win=%0d..%0d fetch_end=%0d park=%0d..%0d seek_waiting=%0d pos=%0d",
-             $time, dut_apf.stream_base_w, dut_apf.win_start, dut_apf.win_end, dut_apf.fetch_end,
+    $display("[%0t] UNDERRUN page=%0d win pages=%0d..%0d fetch_end=%0d park=%0d..%0d seek_waiting=%0d pos=%0d",
+             $time, dut_apf.stream_base, dut_apf.win_start, dut_apf.win_end, dut_apf.fetch_end,
              dut_apf.park_start, dut_apf.park_end, dut_apf.seek_waiting, dut_apf.pos_value);
 
   // Handshake trace
