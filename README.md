@@ -64,9 +64,9 @@ To try it without touching the regular core, install the test build as a separat
 
 MSU-1 is enabled when `<rom>.msu` exists. A data file up to 16MB is copied to memory at boot (expect a short black screen for large ones). A larger one, such as an FMV game's video, is streamed from the SD card while the game plays. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
 
-##### Region
+##### Region / Refresh
 
-The **Region** setting (Auto, NTSC or PAL) overrides the 50/60Hz mode the ROM header asks for. The loader still picks the NTSC or PAL bitstream from the header before the core starts, so a forced region runs on the other region's clock, about 0.9% fast or slow.
+The **Region / Refresh** setting (Auto, NTSC 60Hz or PAL 50Hz) overrides the region and refresh rate the ROM header asks for; on the SNES they are one signal. The loader still picks the NTSC or PAL bitstream from the header before the core starts, so a forced region runs on the other region's clock, about 0.9% fast or slow.
 
 ##### Troubleshooting MSU-1
 

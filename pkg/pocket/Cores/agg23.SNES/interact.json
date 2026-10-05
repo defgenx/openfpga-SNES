@@ -139,7 +139,7 @@
         "value": 1
       },
       {
-        "name": "Region",
+        "name": "Region / Refresh",
         "id": 51,
         "type": "list",
         "enabled": true,
@@ -153,11 +153,11 @@
             "value": 0
           },
           {
-            "name": "NTSC",
+            "name": "NTSC 60Hz",
             "value": 1
           },
           {
-            "name": "PAL",
+            "name": "PAL 50Hz",
             "value": 2
           }
         ]
