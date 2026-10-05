@@ -175,7 +175,13 @@ module MAIN_SNES (
     input wire msu_pos_req_toggle,
     output wire msu_pos_ack_toggle,
     output wire [31:0] msu_pos_value,
-    output wire msu_load_overflow  // diagnostic: streamed data was lost
+
+    // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
+    input wire msu_copy_req_toggle,
+    input wire msu_copy_bank,
+    input wire [31:0] msu_copy_base,
+    input wire [13:0] msu_copy_len,
+    output wire msu_copy_done_toggle
 );
   parameter USE_CX4 = 1'b0;
   parameter USE_SDD1 = 1'b0;
@@ -1187,9 +1193,13 @@ module MAIN_SNES (
 
           .msu_data_download(msu_data_download_s),
           .load_valid(msu_rx_valid & ~msu_rx_addr[27]),
-          .load_addr(msu_rx_addr[23:0]),
+          .load_addr(msu_rx_addr[13:0]),
           .load_data(msu_rx_data),
-          .load_overflow(msu_load_overflow),
+          .copy_req_toggle(msu_copy_req_toggle),
+          .copy_bank(msu_copy_bank),
+          .copy_base(msu_copy_base),
+          .copy_len(msu_copy_len),
+          .copy_done_toggle(msu_copy_done_toggle),
 
           .rd_addr(msu_data_addr),
           .rd_seek(msu_data_seek),
@@ -1229,7 +1239,7 @@ module MAIN_SNES (
       assign msu_data_seek_addr = 0;
       assign msu_pos_ack_toggle = 0;
       assign msu_pos_value = 0;
-      assign msu_load_overflow = 0;
+      assign msu_copy_done_toggle = 0;
     end
   endgenerate
 

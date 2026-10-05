@@ -9,7 +9,6 @@ module msu_overlay (
     input wire [3:0] tstate,
     input wire seen_busy,
     input wire seen_ok,
-    input wire load_overflow,  // the store's write queue overflowed (streaming)
     input wire stream_underrun,  // the game read past the streamed data
     input wire stream_mode,
     input wire [5:0] stream_fill,  // streamed bytes ahead of the game, 63 = full read-ahead
@@ -61,8 +60,7 @@ module msu_overlay (
 
   reg [23:0] msu_handshake_rgb;
   always @(*) begin
-    if (load_overflow) msu_handshake_rgb = 24'hFFFFFF;  // streamed data lost
-    else if (stream_underrun) msu_handshake_rgb = 24'hFF8000;  // stream fell behind the game
+    if (stream_underrun) msu_handshake_rgb = 24'hFF8000;  // stream fell behind the game
     else if (tstate == 4'd14) msu_handshake_rgb = 24'hFF00FF;  // waiting for Ready to Run ack
     else if (tstate == 4'd15 && !seen_busy) msu_handshake_rgb = 24'hFF0000;  // posted, not picked up
     else if (tstate == 4'd15) msu_handshake_rgb = 24'hFFFF00;  // busy, not finished

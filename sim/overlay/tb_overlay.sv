@@ -46,7 +46,6 @@ module tb_overlay;
       .tstate(4'd0),
       .seen_busy(1'b0),
       .seen_ok(1'b1),
-      .load_overflow(1'b0),
       .stream_underrun(1'b0),
       .stream_mode(1'b1),
       .stream_fill(6'd20),

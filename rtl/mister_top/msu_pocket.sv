@@ -96,10 +96,12 @@ endmodule
 
 // The .msu data file in SDRAM banks 2-3 (16MB), reached through the controller's SNI
 // port, which waits for idle slots and so never disturbs ROM timing on port 0.
-// Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface. In stream mode
-// the banks are a ring that msu_apf fills around the reader, see docs/MSU-1.md "Streaming".
+// Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface. msu_apf reads the
+// file a chunk at a time into a block RAM bounce buffer, which this copies into SDRAM between
+// the game's reads; while streaming, the banks are a ring around the reader. See docs/MSU-1.md.
 module msu_sdram_store #(
-    parameter RING_BITS = 24
+    parameter RING_BITS = 24,
+    parameter CHUNK_WORD_BITS = 11  // two bounce buffer banks of 2^n 32-bit words (8KB each)
 ) (
     input wire clk_sys,
 
@@ -112,12 +114,17 @@ module msu_sdram_store #(
     output reg pos_ack_toggle = 0,
     output reg [31:0] pos_value = 0,
 
-    // Load: 32-bit words from msu_bridge_rx while msu_data_download, or any time streaming
-    input wire msu_data_download,
+    // Bounce buffer: chunk words from msu_bridge_rx, addressed {bank, byte offset in chunk}
+    input wire msu_data_download,  // boot copy in progress: the SNES is in reset
     input wire load_valid,
-    input wire [23:0] load_addr,
+    input wire [CHUNK_WORD_BITS+2:0] load_addr,
     input wire [31:0] load_data,
-    output reg load_overflow = 0,
+    // Copy the buffered chunk to file offset copy_base; copy_done_toggle follows when written
+    input wire copy_req_toggle,
+    input wire copy_bank,
+    input wire [31:0] copy_base,
+    input wire [CHUNK_WORD_BITS+2:0] copy_len,
+    output reg copy_done_toggle = 0,
 
     // MSU.sv data port
     input wire [31:0] rd_addr,
@@ -133,24 +140,27 @@ module msu_sdram_store #(
     output reg sni_rd_req = 0,
     input wire sni_ready
 );
-  // Bridge words waiting for their two SNI writes. While streaming, the reader's prefetch
-  // goes first, so words can queue up behind it; data_loader-style backpressure is impossible.
-  // Registered read so it maps to block RAM; the head is usable one cycle after it lands
-  reg [53:0] wq[0:7];  // {word address [23:2], data}
-  reg [53:0] wq_q = 0;
-  reg [2:0] wq_wp = 0;
-  reg [2:0] wq_rp = 0;
-  reg [3:0] wq_count = 0;
-  reg wq_was_nonempty = 0;
-  reg wq_half = 0;  // 1 once the low half of the head word is written
-  wire [21:0] pend_waddr = wq_q[53:32];
-  wire [31:0] pend_data = wq_q[31:0];
-
   // Word addresses wrap at the ring size
   localparam [22:0] WORD_MASK = (23'd1 << (RING_BITS - 1)) - 1'd1;
   function automatic [22:0] wrap(input [22:0] w);
     wrap = w & WORD_MASK;
   endfunction
+
+  // Bounce buffer: APF fills it at bridge speed, the copy drains it at SNI speed. msu_apf only
+  // starts the next chunk after copy_done_toggle, so nothing is ever dropped.
+  reg [31:0] cbuf[0:(2<<CHUNK_WORD_BITS)-1];
+  reg [31:0] cbuf_q = 0;
+  reg [CHUNK_WORD_BITS-1:0] copy_idx = 0;
+  reg [CHUNK_WORD_BITS:0] copy_left = 0;  // 32-bit words still to copy
+  reg copy_half = 0;  // 1 once the low half of copy_idx is written
+  reg copy_q_ok = 0;  // cbuf_q holds copy_idx
+  reg [2:0] copy_req_s = 0;
+  reg copying = 0;
+
+  always @(posedge clk_sys) begin
+    if (load_valid) cbuf[load_addr[CHUNK_WORD_BITS+2:2]] <= load_data;
+    cbuf_q <= cbuf[{copy_bank, copy_idx}];
+  end
 
   reg [2:0] seek_resp_s = 0;
   reg [2:0] pos_req_s = 0;
@@ -159,6 +169,7 @@ module msu_sdram_store #(
   always @(posedge clk_sys) begin
     seek_resp_s <= {seek_resp_s[1:0], seek_resp_toggle};
     pos_req_s <= {pos_req_s[1:0], pos_req_toggle};
+    copy_req_s <= {copy_req_s[1:0], copy_req_toggle};
     if (pos_req_s[2] != pos_ack_toggle) begin
       pos_value <= rd_addr;
       pos_ack_toggle <= pos_req_s[2];
@@ -192,31 +203,33 @@ module msu_sdram_store #(
   // The reader crossed into the prefetched word: shift it in and fetch the one after
   wire prefetch_go = st == ST_IDLE && !msu_data_download && !seek_active && next_valid
       && rd_word == wrap(cur_word + 1'd1);
-  wire write_next = st == ST_IDLE && wq_count != 0 && wq_was_nonempty && !prefetch_go;
-  wire load_accept = (msu_data_download || stream_mode) && load_valid;
+  wire copy_go = st == ST_IDLE && copying && copy_q_ok && !prefetch_go;
+  // SNI word of the buffered word being copied (copy_base is 4-byte aligned)
+  wire [22:0] copy_sni_word = wrap(copy_base[23:1] + {copy_idx, 1'b0} + copy_half);
 
   always @(posedge clk_sys) begin
-    if (load_accept && wq_count != 4'd8) wq[wq_wp] <= {load_addr[23:2], load_data};
-    wq_q <= wq[wq_rp];
-    wq_was_nonempty <= wq_count != 0;
-  end
-
-  always @(posedge clk_sys) begin
-    if (load_accept) begin
-      if (wq_count == 4'd8) load_overflow <= 1;
-      else wq_wp <= wq_wp + 1'd1;
-    end
-
     // A seek can start while a prefetch is in flight; remember it until ST_IDLE
     old_seek <= rd_seek;
     if (rd_seek && !old_seek) seek_pending <= 1;
     if (!rd_seek) seek_active <= 0;
 
+    // cbuf_q follows copy_idx one cycle later
+    copy_q_ok <= copying;
+    if (!copying && copy_req_s[2] != copy_done_toggle) begin
+      copying <= 1;
+      copy_idx <= 0;
+      copy_half <= 0;
+      copy_left <= (copy_len + 2'd3) >> 2;
+      copy_q_ok <= 0;
+    end else if (copying && copy_left == 0) begin
+      copying <= 0;
+      copy_done_toggle <= copy_req_s[2];
+    end
+
     case (st)
       ST_IDLE: begin
         if (prefetch_go) begin
-          // Reads crossed into the prefetched word: shift it in and prefetch the next. First, as
-          // the game reads without waiting; a pending write has until the next word to land
+          // First, as the game reads without waiting; the copy has no deadline
           cur_word <= wrap(cur_word + 1'd1);
           cur_q <= next_q;
           next_valid <= 0;
@@ -225,17 +238,20 @@ module msu_sdram_store #(
           dst <= DST_NEXT;
           wait_cnt <= 0;
           st <= ST_WAIT;
-        end else if (write_next) begin
+        end else if (copy_go && copy_left != 0) begin
           // Low half first, at the word's address; the high half follows at +2
-          sni_addr <= {1'b1, wrap({pend_waddr, wq_half}), 1'b0};
-          sni_din <= wq_half ? pend_data[31:16] : pend_data[15:0];
-          wq_half <= ~wq_half;
-          if (wq_half) wq_rp <= wq_rp + 1'd1;
+          sni_addr <= {1'b1, copy_sni_word, 1'b0};
+          sni_din <= copy_half ? cbuf_q[31:16] : cbuf_q[15:0];
+          copy_half <= ~copy_half;
+          if (copy_half) begin
+            copy_idx <= copy_idx + 1'd1;
+            copy_left <= copy_left - 1'd1;
+          end
           sni_wr_req <= 1;
           wait_cnt <= 0;
           st <= ST_WAIT;
         end else if (!msu_data_download && seek_pending && stream_mode && !stream_seek_wait) begin
-          // Streaming: have msu_apf buffer from here first (data writes keep flowing meanwhile)
+          // Streaming: have msu_apf buffer from here first (copies keep flowing meanwhile)
           seek_pending <= 0;
           seek_active <= 1;
           rd_seek_done <= 0;
@@ -287,7 +303,7 @@ module msu_sdram_store #(
 
       ST_ACK: begin
         st <= ST_IDLE;
-        // Only a completed read advances a seek: streamed data writes also pass through here
+        // Only a completed read advances a seek: copy writes also pass through here
         if (last_was_read && seek_active && dst == DST_CUR && !rd_seek_done) begin
           // Seek: fetch the following word before reporting done
           sni_addr <= {1'b1, wrap(cur_word + 23'd1), 1'b0};
@@ -302,7 +318,5 @@ module msu_sdram_store #(
 
       default: st <= ST_IDLE;
     endcase
-
-    wq_count <= wq_count + (load_accept && wq_count != 4'd8) - (write_next && wq_half);
   end
 endmodule

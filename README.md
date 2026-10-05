@@ -97,12 +97,11 @@ Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small sq
 | Yellow | The Pocket accepted a request but has not finished it (a large `.msu` copy, for a few seconds) |
 | Red | A request is waiting and the Pocket has not picked it up |
 | Magenta | The Pocket never acknowledged the core at startup |
-| White | Streamed `.msu` data was lost (stays white until the next boot) |
 | Orange | The game read past the streamed data: the SD card did not keep up (stays orange until the next boot) |
 
 CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.
 
-FMV games such as Super Road Blaster stream their video from the `.msu` file. If the game reports bad video frames (e.g. `video-frame FE01 of chapter B479 is bad`), the stream did not keep up with it. With the debug squares on, a white right-hand square means streamed data was lost; please report it.
+FMV games such as Super Road Blaster stream their video from the `.msu` file. If the game reports bad video frames (e.g. `video-frame FE01 of chapter B479 is bad`), the stream did not keep up with it. With the debug squares on, an orange right-hand square means the stream fell behind the game; please report it.
 
 ##### Building the MSU-1 core on Windows
 

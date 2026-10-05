@@ -229,7 +229,12 @@ module tb_msu;
       .data_seek_resp_toggle(seek_resp_t),
       .pos_req_toggle(pos_req_t),
       .pos_ack_toggle(pos_ack_t),
-      .pos_value(pos_value)
+      .pos_value(pos_value),
+      .copy_req_toggle(copy_req_t),
+      .copy_bank(copy_bank),
+      .copy_base(copy_base),
+      .copy_len(copy_len),
+      .copy_done_toggle(copy_done_t)
   );
 
   wire rx_valid;
@@ -374,7 +379,9 @@ module tb_msu;
   reg [15:0] sni_dout = 0;
   wire sni_wr_req, sni_rd_req;
   reg sni_ready = 0;
-  wire load_overflow;
+  wire copy_req_t, copy_done_t, copy_bank;
+  wire [31:0] copy_base;
+  wire [13:0] copy_len;
 
   reg [2:0] stream_mode_s = 0;
   always @(posedge clk_sys) stream_mode_s <= {stream_mode_s[1:0], stream_mode};
@@ -392,9 +399,13 @@ module tb_msu;
       .pos_value(pos_value),
       .msu_data_download(msu_data_download_s),
       .load_valid(rx_valid & ~rx_addr[27]),
-      .load_addr(rx_addr[23:0]),
+      .load_addr(rx_addr[13:0]),
       .load_data(rx_data),
-      .load_overflow(load_overflow),
+      .copy_req_toggle(copy_req_t),
+      .copy_bank(copy_bank),
+      .copy_base(copy_base),
+      .copy_len(copy_len),
+      .copy_done_toggle(copy_done_t),
       .rd_addr(m_data_addr),
       .rd_seek(m_data_seek),
       .rd_seek_done(m_data_ack),
@@ -710,10 +721,6 @@ module tb_msu;
         $display("FAIL: MSU not enabled");
         $finish;
       end
-      if (load_overflow) begin
-        $display("FAIL: loader FIFO overflow");
-        errors = errors + 1;
-      end
       if (STREAM) begin
         if (!stream_mode) begin
           $display("FAIL: a %0d-byte .msu should stream", MSU_SIZE);
@@ -825,10 +832,6 @@ module tb_msu;
       end
     end
 
-    if (load_overflow) begin
-      $display("FAIL: store write queue overflowed");
-      errors = errors + 1;
-    end
     if (stream_underrun) begin
       $display("FAIL: stream underrun");
       errors = errors + 1;
