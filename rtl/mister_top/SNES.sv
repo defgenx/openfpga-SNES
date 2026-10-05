@@ -155,9 +155,9 @@ module MAIN_SNES (
     input wire msu_data_download,
     input wire msu_audio_download,
 
-    // Bridge words: bit 27 of the address set = .pcm sector, clear = .msu data
+    // Bridge words for the bounce buffer: {bank, byte offset in the chunk}
     input wire msu_rx_valid,
-    input wire [27:0] msu_rx_addr,
+    input wire [13:0] msu_rx_addr,
     input wire [31:0] msu_rx_data,
 
     output wire msu_track_req_toggle,
@@ -1135,8 +1135,6 @@ module MAIN_SNES (
   wire [15:0] msu_l;
   wire [15:0] msu_r;
 
-  wire        msu_audio_wr;
-  wire [15:0] msu_audio_wr_data;
 
   generate
     if (USE_MSU == 1'b1) begin : msu
@@ -1150,11 +1148,6 @@ module MAIN_SNES (
           .msu_audio_seek(msu_audio_seek),
           .msu_audio_sector(msu_audio_sector),
           .msu_audio_download(msu_audio_download_s),
-
-          .rx_valid(msu_rx_valid & msu_rx_addr[27]),
-          .rx_data(msu_rx_data),
-          .msu_audio_wr(msu_audio_wr),
-          .msu_audio_data(msu_audio_wr_data),
 
           .msu_track_mounting(msu_track_mounting),
           .msu_track_missing(msu_track_missing),
@@ -1185,8 +1178,8 @@ module MAIN_SNES (
           .track_processing(msu_track_request),
 
           .audio_download(msu_audio_download_s),
-          .audio_data(msu_replay_wr ? msu_replay_data : msu_audio_wr_data),
-          .audio_data_wr(msu_audio_wr | msu_replay_wr),
+          .audio_data(msu_replay_data),
+          .audio_data_wr(msu_replay_wr),
 
           .audio_ack(msu_audio_ack),
           .audio_sector(msu_audio_sector),
@@ -1196,7 +1189,6 @@ module MAIN_SNES (
           .audio_loop_index(msu_audio_loop_index),
           .resume_loop_index(msu_resume_loop_index),
 
-          .audio_refill(),
           .audio_l(msu_l),
           .audio_r(msu_r)
       );
@@ -1216,8 +1208,8 @@ module MAIN_SNES (
           .seek_slowest(msu_seek_slowest),
 
           .msu_data_download(msu_data_download_s),
-          .load_valid(msu_rx_valid & ~msu_rx_addr[27]),
-          .load_addr(msu_rx_addr[13:0]),
+          .load_valid(msu_rx_valid),
+          .load_addr(msu_rx_addr),
           .load_data(msu_rx_data),
           .copy_req_toggle(msu_copy_req_toggle),
           .copy_region(msu_copy_region),
@@ -1268,8 +1260,6 @@ module MAIN_SNES (
       assign msu_track_req_num = 0;
       assign msu_sector_req_toggle = 0;
       assign msu_sector_req_num = 0;
-      assign msu_audio_wr = 0;
-      assign msu_audio_wr_data = 0;
       assign msu_data_seek_req_toggle = 0;
       assign msu_data_seek_addr = 0;
       assign msu_pos_ack_toggle = 0;

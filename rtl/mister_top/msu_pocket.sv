@@ -1,7 +1,8 @@
 // clk_sys half of MSU-1 on the Pocket. See docs/MSU-1.md.
 //
 // msu_host replaces upstream hps_ext.v: same mounting/missing/ack behaviour, but the
-// requests go to target/pocket/msu_apf.sv (clk_74a) as toggles instead of to the HPS.
+// requests go to target/pocket/msu_apf.sv (clk_74a) as toggles instead of to the HPS. Sector
+// data reaches msu_audio from msu_sdram_store's audio ring replay.
 module msu_host (
     input wire clk_sys,
     input wire reset,
@@ -13,12 +14,6 @@ module msu_host (
     input wire msu_audio_seek,
     input wire [21:0] msu_audio_sector,
     input wire msu_audio_download,  // already synchronized to clk_sys
-
-    // .pcm words from msu_bridge_rx, split into msu_audio's 16-bit ioctl writes
-    input wire rx_valid,
-    input wire [31:0] rx_data,
-    output reg msu_audio_wr = 0,
-    output reg [15:0] msu_audio_data = 0,
 
     output reg msu_track_mounting = 0,
     output reg msu_track_missing = 0,
@@ -40,22 +35,8 @@ module msu_host (
   reg old_seek = 0;
   reg old_track_request = 0;
   reg old_download = 0;
-  reg [15:0] audio_hi = 0;
-  reg audio_hi_pending = 0;
 
   always @(posedge clk_sys) begin
-    msu_audio_wr <= 0;
-    if (rx_valid) begin
-      msu_audio_wr <= 1;
-      msu_audio_data <= rx_data[15:0];
-      audio_hi <= rx_data[31:16];
-      audio_hi_pending <= 1;
-    end else if (audio_hi_pending) begin
-      msu_audio_wr <= 1;
-      msu_audio_data <= audio_hi;
-      audio_hi_pending <= 0;
-    end
-
     track_resp_s <= {track_resp_s[1:0], track_resp_toggle};
 
     old_download <= msu_audio_download;

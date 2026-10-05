@@ -515,9 +515,6 @@ module core_top (
       .target_dataslot_bridgeaddr(msu_target_bridgeaddr),
       .target_dataslot_length(msu_target_length),
 
-      .dbg_tstate(cmd_dbg_tstate),
-      .dbg_seen_busy(cmd_dbg_seen_busy),
-      .dbg_seen_ok(cmd_dbg_seen_ok),
 
       .target_buffer_param_struct(32'h3000_0000),
       .target_buffer_resp_struct(32'h3000_0000),
@@ -650,7 +647,7 @@ module core_top (
   end
 
   ////////////////////////////  MSU-1  ////////////////////////////////////
-  // See docs/MSU-1.md. Bridge regions: 0x3 filename structs, 0x4 .msu data and .pcm sectors
+  // See docs/MSU-1.md. Bridge regions: 0x3 filename structs, 0x4 the bounce buffer
 
   wire target_dataslot_done;
   wire [2:0] target_dataslot_err;
@@ -770,9 +767,9 @@ module core_top (
       .replay_done_toggle(msu_replay_done_toggle)
   );
 
-  // Region 0x4 words: 0x4000_0000 + offset is .msu data, 0x4800_0000 a .pcm sector
+  // Region 0x4 words: .msu and .pcm chunks for the bounce buffer at 0x4000_0000 + {bank, offset}
   wire msu_rx_valid;
-  wire [27:0] msu_rx_addr;
+  wire [13:0] msu_rx_addr;
   wire [31:0] msu_rx_data;
 
   msu_bridge_rx msu_bridge_rx (
@@ -1200,24 +1197,18 @@ module core_top (
   // MSU-1 diagnostic, colours in docs/MSU-1.md. Two 32x32 squares, drawn while the
   // "MSU-1 Debug Squares" setting (0x300) is on:
   // x 32-63 the probe result, x 72-103 the APF target command handshake.
-  wire [3:0] cmd_dbg_tstate;
-  wire cmd_dbg_seen_busy;
-  wire cmd_dbg_seen_ok;
 
   wire [3:0] msu_probe_status_s;
-  wire [3:0] cmd_dbg_tstate_s;
-  wire cmd_dbg_seen_busy_s;
-  wire cmd_dbg_seen_ok_s;
   wire msu_debug_squares_s;
   wire msu_stream_underrun_s;
   wire msu_stream_mode_s;
   wire [5:0] msu_stream_fill_s;
   wire [1:0] msu_seek_slowest_s;
   synch_3 #(
-      .WIDTH(21)
+      .WIDTH(15)
   ) msu_dbg_sync (
-      {msu_seek_slowest, msu_stream_fill, msu_stream_mode, msu_stream_underrun, msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
-      {msu_seek_slowest_s, msu_stream_fill_s, msu_stream_mode_s, msu_stream_underrun_s, msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
+      {msu_seek_slowest, msu_stream_fill, msu_stream_mode, msu_stream_underrun, msu_debug_squares, msu_probe_status},
+      {msu_seek_slowest_s, msu_stream_fill_s, msu_stream_mode_s, msu_stream_underrun_s, msu_debug_squares_s, msu_probe_status_s},
       clk_video_5_37
   );
 
@@ -1231,9 +1222,6 @@ module core_top (
           .de(de_out),
           .vsync(video_vs),
           .probe_status(msu_probe_status_s),
-          .tstate(cmd_dbg_tstate_s),
-          .seen_busy(cmd_dbg_seen_busy_s),
-          .seen_ok(cmd_dbg_seen_ok_s),
               .stream_underrun(msu_stream_underrun_s),
           .stream_mode(msu_stream_mode_s),
           .stream_fill(msu_stream_fill_s),

@@ -141,19 +141,21 @@ streamed:
   in bursts of 8KB reads, from under `AUD_LOW` (176 sectors, ~1s) ahead of the last request up
   to `AUD_HIGH` (352, ~2s); during a burst `.msu` read-ahead waits unless a seek needs data. So
   the slot changes about twice a second instead of around every sector, and the 256KB `.msu`
-  read-ahead covers each burst. `msu_audio`'s FIFO is 16KB (~93ms) and refills from half full;
-  a track that does not repeat stops once the FIFO has played out (upstream stopped as soon as
-  the last sector was fetched). Sector numbers are 18 bits: tracks up to 256MB.
+  read-ahead covers each burst. `msu_audio` is upstream's, with its 4KB (~23ms) FIFO: a
+  restart outside the ring (a loop point of a track over ~6s, once evicted) waits for an APF
+  read, which can leave a short gap if the slot has to change. Sector numbers are 18 bits:
+  tracks up to 256MB.
 - **Reader position:** `msu_apf` polls it (`pos_req_toggle`) to decide on read-ahead. `MSU.sv`
   moves the address as soon as the game writes a seek, so the store flags positions taken
   during a seek (`pos_seeking`), and they are ignored.
 - **Read-ahead:** starts at the game's first seek. Between other work, `msu_apf` polls the reader's position (`pos_req_toggle`)
   and fetches the next `STREAM_CHUNK` (8KB) while `fetch_end` is less than `STREAM_AHEAD`
   (256KB) past it.
-- **Priority:** `.pcm` sector requests go before data chunks.
-- **Underrun:** sequential reads cannot wait. If the game reads past `win_end`, it gets stale
-  data; `stream_underrun` turns the right-hand debug square orange, and the window restarts at
-  the reader if it got past `fetch_end`.
+- **Priority:** a waiting `msu_audio` request (replay, or the read it waits for), then seek
+  bookkeeping, then a seek's data, then an audio burst, then `.msu` read-ahead.
+- **Underrun:** the store freezes the reader at `avail_end` (above); `stream_underrun` still
+  turns the right-hand debug square orange when `msu_apf` sees the reader past `win_end`, and
+  the window restarts at the reader if it got past `fetch_end`.
 
 `sim/msu` runs a 40,000-byte file through an 8KB ring (`le_stream`, `be_stream`), with a reader
 at full DMA speed. The `srb` case replays Super Road Blaster's pattern with the hardware's lead
@@ -176,8 +178,8 @@ quirk below.
 **APF's file cache:** the [openFPGA 2.1 changelog](https://www.analogue.co/developer/docs/openfpga/changelog/2-1)
 says a target read walks the file's cluster chain and caches up to 16 fragments, so later reads
 of the same slot seek instantly, but the cache is lost whenever another data slot is accessed.
-Music (slot 21) and data (slot 20) alternate, so most `.msu` reads after a `.pcm` read pay that
-walk again.
+Music (slot 21) and data (slot 20) both need reading while a video plays; the audio ring keeps
+the slot changes to about two a second, each paying that walk once.
 
 ## Memory
 

@@ -276,7 +276,7 @@ module tb_msu;
   );
 
   wire rx_valid;
-  wire [27:0] rx_addr;
+  wire [13:0] rx_addr;
   wire [31:0] rx_data;
 
   msu_bridge_rx bridge_rx (
@@ -292,8 +292,6 @@ module tb_msu;
   );
 
   // Same split as SNES.sv
-  wire audio_wr;
-  wire [15:0] audio_data;
 
   ////////////////////////////////////////////////////////////////////////////
   // DUT, clk_sys side
@@ -370,10 +368,6 @@ module tb_msu;
       .msu_audio_seek(m_audio_seek),
       .msu_audio_sector(m_sector),
       .msu_audio_download(audio_download_s),
-      .rx_valid(rx_valid & rx_addr[27]),
-      .rx_data(rx_data),
-      .msu_audio_wr(audio_wr),
-      .msu_audio_data(audio_data),
       .msu_track_mounting(m_track_mounting),
       .msu_track_missing(m_track_missing),
       .msu_audio_size(m_audio_size),
@@ -387,7 +381,6 @@ module tb_msu;
   );
 
   wire [15:0] msu_l, msu_r;
-  wire audio_refill;
   msu_audio audio (
       .reset(reset),
       .clk(clk_sys),
@@ -400,8 +393,8 @@ module tb_msu;
       .track_size(m_audio_size),
       .track_processing(m_track_request),
       .audio_download(audio_download_s),
-      .audio_data(replay_wr ? replay_data : audio_data),
-      .audio_data_wr(audio_wr | replay_wr),
+      .audio_data(replay_data),
+      .audio_data_wr(replay_wr),
       .audio_ack(m_audio_ack),
       .audio_sector(m_sector),
       .audio_req(m_audio_req),
@@ -409,7 +402,6 @@ module tb_msu;
       .resume_sector(m_resume_sector),
       .audio_loop_index(m_loop_index),
       .resume_loop_index(m_resume_loop_index),
-      .audio_refill(audio_refill),
       .audio_l(msu_l),
       .audio_r(msu_r)
   );
@@ -440,8 +432,8 @@ module tb_msu;
       .pos_value(pos_value),
       .pos_seeking(pos_seeking),
       .msu_data_download(msu_data_download_s),
-      .load_valid(rx_valid & ~rx_addr[27]),
-      .load_addr(rx_addr[13:0]),
+      .load_valid(rx_valid),
+      .load_addr(rx_addr),
       .load_data(rx_data),
       .copy_req_toggle(copy_req_t),
       .copy_region(copy_region),

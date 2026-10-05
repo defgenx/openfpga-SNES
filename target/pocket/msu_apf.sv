@@ -130,7 +130,6 @@ module msu_apf #(
   localparam S_DETECT_WAIT = 20;
   localparam S_DETECT = 21;
   localparam S_POS_WAIT = 22;
-  localparam S_FETCH = 23;
   localparam S_PRELOAD = 24;
   localparam S_FETCH_CHECK = 25;
   localparam S_FETCH_GO = 26;
@@ -295,8 +294,8 @@ module msu_apf #(
   reg [31:0] slot_size;
   reg [1:0] dt_wait;
 
-  reg [21:0] read_page;  // reads start on a 1KB page: .pcm sectors and stream chunks alike
-  reg [13:0] read_length;  // chunks and .pcm sectors are at most 8KB
+  reg [21:0] read_page;  // reads start on a 1KB page: .pcm and .msu chunks alike
+  reg [13:0] read_length;  // chunks are at most 8KB
   wire [31:0] read_offset = {read_page, 10'b0};
   reg [9:0] drain;
 
@@ -320,7 +319,6 @@ module msu_apf #(
   assign replay_len = sector_length;
 
   localparam [31:0] RING_SIZE = 32'd1 << RING_BITS;
-  localparam [31:0] RING_MASK = RING_SIZE - 1'd1;
 
   // Streaming: two windows in their own halves of the SDRAM ring (regions). The active one
   // holds file bytes [win_start, win_end) in SDRAM, with [win_end, fetch_end) read from APF
@@ -907,7 +905,7 @@ module msu_apf #(
 
 endmodule
 
-// Bridge writes to region 0x4 (.msu data and .pcm sectors) handed to clk_sys one 32-bit word
+// Bridge writes to region 0x4 (.msu and .pcm chunks for the bounce buffer) handed to clk_sys one 32-bit word
 // at a time. APF writes at most every ~75 clk_74a cycles, so a toggle handshake replaces
 // data_loader's dual-clock FIFO; the word and address are held until the next write.
 module msu_bridge_rx #(
@@ -921,18 +919,18 @@ module msu_bridge_rx #(
 
     input wire clk_sys,
     output reg rx_valid = 0,  // one clk_sys pulse per word
-    output reg [27:0] rx_addr = 0,
+    output reg [13:0] rx_addr = 0,  // {bank, byte offset in the chunk}
     output reg [31:0] rx_data = 0  // file byte n at [8n+7:8n], as data_loader unpacks it
 );
   reg prev_wr = 0;
   reg toggle = 0;
-  reg [27:0] held_addr = 0;
+  reg [13:0] held_addr = 0;
   reg [31:0] held_data = 0;
 
   always @(posedge clk_74a) begin
     prev_wr <= bridge_wr;
     if (bridge_wr && !prev_wr && bridge_addr[31:28] == REGION) begin
-      held_addr <= bridge_addr[27:0];
+      held_addr <= bridge_addr[13:0];
       held_data <= bridge_endian_little ? bridge_wr_data : {
         bridge_wr_data[7:0], bridge_wr_data[15:8], bridge_wr_data[23:16], bridge_wr_data[31:24]
       };

@@ -6,9 +6,6 @@ module msu_overlay (
     input wire de,
     input wire vsync,  // scanline_filler's one-cycle pulse
     input wire [3:0] probe_status,
-    input wire [3:0] tstate,
-    input wire seen_busy,
-    input wire seen_ok,
     input wire stream_underrun,  // the game read past the streamed data
     input wire stream_mode,
     input wire [5:0] stream_fill,  // streamed bytes ahead of the game, 63 = full read-ahead
@@ -60,8 +57,7 @@ module msu_overlay (
   end
 
   // Square 2: orange once the stream fell behind the game, else the longest streaming seek:
-  // gray none yet, green under 10ms, yellow under 30ms, red 30ms or more. tstate/seen_* are
-  // kept as ports for bring-up but no longer drawn, which frees their logic
+  // gray none yet, green under 10ms, yellow under 30ms, red 30ms or more.
   wire [23:0] msu_handshake_rgb = stream_underrun ? 24'hFF8000
       : seek_slowest == 2'd0 ? 24'h404040 : seek_slowest == 2'd1 ? 24'h00FF00
       : seek_slowest == 2'd2 ? 24'hFFFF00 : 24'hFF0000;
