@@ -680,6 +680,15 @@ module core_top (
   wire msu_sector_req_toggle;
   wire [21:0] msu_sector_req_num;
 
+  wire msu_stream_mode;
+  wire msu_data_seek_req_toggle;
+  wire [31:0] msu_data_seek_addr;
+  wire msu_data_seek_resp_toggle;
+  wire msu_pos_req_toggle;
+  wire msu_pos_ack_toggle;
+  wire [31:0] msu_pos_value;
+  wire msu_load_overflow;
+
   msu_apf msu_apf (
       .clk_74a(clk_74a),
 
@@ -719,7 +728,15 @@ module core_top (
       .track_size(msu_track_resp_size),
 
       .sector_req_toggle(msu_sector_req_toggle),
-      .sector_num(msu_sector_req_num)
+      .sector_num(msu_sector_req_num),
+
+      .stream_mode(msu_stream_mode),
+      .data_seek_req_toggle(msu_data_seek_req_toggle),
+      .data_seek_addr(msu_data_seek_addr),
+      .data_seek_resp_toggle(msu_data_seek_resp_toggle),
+      .pos_req_toggle(msu_pos_req_toggle),
+      .pos_ack_toggle(msu_pos_ack_toggle),
+      .pos_value(msu_pos_value)
   );
 
   // Region 0x4 words: 0x4000_0000 + offset is .msu data, 0x4800_0000 a .pcm sector
@@ -1052,7 +1069,16 @@ module core_top (
       .msu_track_resp_toggle(msu_track_resp_toggle),
       .msu_track_resp_size(msu_track_resp_size),
       .msu_sector_req_toggle(msu_sector_req_toggle),
-      .msu_sector_req_num(msu_sector_req_num)
+      .msu_sector_req_num(msu_sector_req_num),
+
+      .msu_stream_mode(msu_stream_mode),
+      .msu_data_seek_req_toggle(msu_data_seek_req_toggle),
+      .msu_data_seek_addr(msu_data_seek_addr),
+      .msu_data_seek_resp_toggle(msu_data_seek_resp_toggle),
+      .msu_pos_req_toggle(msu_pos_req_toggle),
+      .msu_pos_ack_toggle(msu_pos_ack_toggle),
+      .msu_pos_value(msu_pos_value),
+      .msu_load_overflow(msu_load_overflow)
   );
 
   // Video
@@ -1132,11 +1158,12 @@ module core_top (
   wire cmd_dbg_seen_busy_s;
   wire cmd_dbg_seen_ok_s;
   wire msu_debug_squares_s;
+  wire msu_load_overflow_s;
   synch_3 #(
-      .WIDTH(11)
+      .WIDTH(12)
   ) msu_dbg_sync (
-      {msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
-      {msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
+      {msu_load_overflow, msu_debug_squares, msu_probe_status, cmd_dbg_tstate, cmd_dbg_seen_busy, cmd_dbg_seen_ok},
+      {msu_load_overflow_s, msu_debug_squares_s, msu_probe_status_s, cmd_dbg_tstate_s, cmd_dbg_seen_busy_s, cmd_dbg_seen_ok_s},
       clk_video_5_37
   );
 
@@ -1151,6 +1178,7 @@ module core_top (
       .tstate(cmd_dbg_tstate_s),
       .seen_busy(cmd_dbg_seen_busy_s),
       .seen_ok(cmd_dbg_seen_ok_s),
+      .load_overflow(msu_load_overflow_s),
       .on(msu_overlay_on),
       .rgb(msu_overlay_rgb)
   );

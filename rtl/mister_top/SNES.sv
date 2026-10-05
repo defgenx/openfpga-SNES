@@ -164,7 +164,17 @@ module MAIN_SNES (
     input wire msu_track_resp_toggle,
     input wire [31:0] msu_track_resp_size,
     output wire msu_sector_req_toggle,
-    output wire [21:0] msu_sector_req_num
+    output wire [21:0] msu_sector_req_num,
+
+    // Streaming of a .msu file larger than the SDRAM ring (msu_apf)
+    input wire msu_stream_mode,
+    output wire msu_data_seek_req_toggle,
+    output wire [31:0] msu_data_seek_addr,
+    input wire msu_data_seek_resp_toggle,
+    input wire msu_pos_req_toggle,
+    output wire msu_pos_ack_toggle,
+    output wire [31:0] msu_pos_value,
+    output wire msu_load_overflow  // diagnostic: streamed data was lost
 );
   parameter USE_CX4 = 1'b0;
   parameter USE_SDD1 = 1'b0;
@@ -1052,12 +1062,13 @@ module MAIN_SNES (
   wire msu_busy_s;
   wire msu_data_download_s;
   wire msu_audio_download_s;
+  wire msu_stream_mode_s;
 
   synch_3 #(
-      .WIDTH(4)
+      .WIDTH(5)
   ) msu_levels_s (
-      {msu_enable, msu_busy, msu_data_download, msu_audio_download},
-      {msu_enable_s, msu_busy_s, msu_data_download_s, msu_audio_download_s},
+      {msu_enable, msu_busy, msu_data_download, msu_audio_download, msu_stream_mode},
+      {msu_enable_s, msu_busy_s, msu_data_download_s, msu_audio_download_s, msu_stream_mode_s},
       clk_sys
   );
 
@@ -1165,11 +1176,19 @@ module MAIN_SNES (
       msu_sdram_store msu_sdram_store (
           .clk_sys(clk_sys),
 
+          .stream_mode(msu_stream_mode_s),
+          .seek_req_toggle(msu_data_seek_req_toggle),
+          .seek_addr(msu_data_seek_addr),
+          .seek_resp_toggle(msu_data_seek_resp_toggle),
+          .pos_req_toggle(msu_pos_req_toggle),
+          .pos_ack_toggle(msu_pos_ack_toggle),
+          .pos_value(msu_pos_value),
+
           .msu_data_download(msu_data_download_s),
           .load_valid(msu_rx_valid & ~msu_rx_addr[27]),
           .load_addr(msu_rx_addr[23:0]),
           .load_data(msu_rx_data),
-          .load_overflow(),
+          .load_overflow(msu_load_overflow),
 
           .rd_addr(msu_data_addr),
           .rd_seek(msu_data_seek),
@@ -1205,6 +1224,11 @@ module MAIN_SNES (
       assign msu_sector_req_num = 0;
       assign msu_audio_wr = 0;
       assign msu_audio_wr_data = 0;
+      assign msu_data_seek_req_toggle = 0;
+      assign msu_data_seek_addr = 0;
+      assign msu_pos_ack_toggle = 0;
+      assign msu_pos_value = 0;
+      assign msu_load_overflow = 0;
     end
   endgenerate
 

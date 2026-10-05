@@ -10,12 +10,15 @@ module tb_msu;
   parameter HAVE_MSU = 1;
   // APF writes the filename struct in the opposite byte order to file data
   parameter STRUCT_SWAP = 0;
+  // .msu larger than the (scaled-down) ring: streamed instead of copied at boot
+  parameter STREAM = 0;
+  localparam RING_BITS = 13;
 
   // ROM path chosen to exercise dots in directory names and in the file name
   localparam string ROM_PATH = "/Assets/snes/common/msu.packs/Game.v1.sfc";
   localparam string BASE = "/Assets/snes/common/msu.packs/Game.v1";
 
-  localparam integer MSU_SIZE = 3001;
+  localparam integer MSU_SIZE = STREAM ? 40000 : 3001;
   localparam integer T1_SAMPLES = 700;  // 2 full sectors + a partial one
   localparam integer T12_SAMPLES = 900;  // upstream drops a partial sector right after sector 0
   localparam integer T12_LOOP = 300;
@@ -173,9 +176,18 @@ module tb_msu;
   wire [31:0] track_size;
   wire [21:0] sector_num;
 
+  wire stream_mode, seek_req_t, seek_resp_t, pos_req_t, pos_ack_t;
+  wire [31:0] seek_addr, pos_value;
+
   msu_apf #(
-      .QUIET_BITS  (8),
-      .TIMEOUT_BITS(26)
+      .QUIET_BITS(8),
+      .TIMEOUT_BITS(26),
+      .RING_BITS(RING_BITS),
+      .DATA_MAX_SIZE(4096),
+      .STREAM_CHUNK(512),
+      .STREAM_LEAD(1024),
+      .STREAM_GUARD(1024),
+      .STREAM_AHEAD(2048)
   ) dut_apf (
       .clk_74a(clk_74a),
       .ioctl_download(ioctl_download),
@@ -208,7 +220,14 @@ module tb_msu;
       .track_resp_toggle(track_resp_toggle),
       .track_size(track_size),
       .sector_req_toggle(sector_req_toggle),
-      .sector_num(sector_num)
+      .sector_num(sector_num),
+      .stream_mode(stream_mode),
+      .data_seek_req_toggle(seek_req_t),
+      .data_seek_addr(seek_addr),
+      .data_seek_resp_toggle(seek_resp_t),
+      .pos_req_toggle(pos_req_t),
+      .pos_ack_toggle(pos_ack_t),
+      .pos_value(pos_value)
   );
 
   wire rx_valid;
@@ -355,8 +374,20 @@ module tb_msu;
   reg sni_ready = 0;
   wire load_overflow;
 
-  msu_sdram_store store (
+  reg [2:0] stream_mode_s = 0;
+  always @(posedge clk_sys) stream_mode_s <= {stream_mode_s[1:0], stream_mode};
+
+  msu_sdram_store #(
+      .RING_BITS(RING_BITS)
+  ) store (
       .clk_sys(clk_sys),
+      .stream_mode(stream_mode_s[2]),
+      .seek_req_toggle(seek_req_t),
+      .seek_addr(seek_addr),
+      .seek_resp_toggle(seek_resp_t),
+      .pos_req_toggle(pos_req_t),
+      .pos_ack_toggle(pos_ack_t),
+      .pos_value(pos_value),
       .msu_data_download(msu_data_download_s),
       .load_valid(rx_valid & ~rx_addr[27]),
       .load_addr(rx_addr[23:0]),
@@ -396,8 +427,9 @@ module tb_msu;
       sni_is_wr <= sni_wr_req;
       sni_lat_addr <= sni_addr;
       sni_lat_din <= sni_din;
-      // Refresh and ROM traffic can hold SNI off for a while
-      sni_delay <= 5 + ($urandom % 24);
+      // sdram.sv starts an SNI access in the first idle slot (a ROM access or refresh lasts a
+      // few clk_mem) and completes it ~5 clk_mem later
+      sni_delay <= 4 + ($urandom % 12);
     end else if (sni_delay > 0) begin
       sni_delay <= sni_delay - 1;
       if (sni_delay == 1) begin
@@ -680,12 +712,19 @@ module tb_msu;
         $display("FAIL: loader FIFO overflow");
         errors = errors + 1;
       end
-      for (i = 0; i < MSU_SIZE; i = i + 1)
-        if ((i[0] ? sdram[i>>1][15:8] : sdram[i>>1][7:0]) !== file_byte(1, i)) begin
-          if (errors < 10) $display("FAIL: sdram byte %0d", i);
+      if (STREAM) begin
+        if (!stream_mode) begin
+          $display("FAIL: a %0d-byte .msu should stream", MSU_SIZE);
           errors = errors + 1;
         end
-      $display("[%0t] .msu preload checked (%0d bytes)", $time, MSU_SIZE);
+      end else begin
+        for (i = 0; i < MSU_SIZE; i = i + 1)
+          if ((i[0] ? sdram[i>>1][15:8] : sdram[i>>1][7:0]) !== file_byte(1, i)) begin
+            if (errors < 10) $display("FAIL: sdram byte %0d", i);
+            errors = errors + 1;
+          end
+        $display("[%0t] .msu preload checked (%0d bytes)", $time, MSU_SIZE);
+      end
 
       repeat (20) @(posedge clk_sys);
       // Identification string
@@ -709,6 +748,23 @@ module tb_msu;
             errors = errors + 1;
           end
         end
+      end
+      if (STREAM) begin
+        // One long read across several ring wraps while chunks refill behind it
+        base = 5000;
+        cpu_write(0, base[7:0]);
+        cpu_write(1, base[15:8]);
+        cpu_write(2, 0);
+        cpu_write(3, 0);
+        wait_status_clear(7, "data busy (long read)");
+        for (i = 0; i < 20000; i = i + 1) begin
+          cpu_read(1, v);
+          if (v !== file_byte(1, base + i)) begin
+            if (errors < 10) $display("FAIL: stream data[%0d] got %h want %h", base + i, v, file_byte(1, base + i));
+            errors = errors + 1;
+          end
+        end
+        $display("[%0t] streamed 20000 bytes across the %0d-byte ring", $time, 1 << RING_BITS);
       end
       $display("[%0t] data port checked", $time);
 
@@ -767,6 +823,10 @@ module tb_msu;
       end
     end
 
+    if (load_overflow) begin
+      $display("FAIL: store write queue overflowed");
+      errors = errors + 1;
+    end
     if (errors == 0) $display("PASS (LITTLE=%0d HAVE_MSU=%0d)", LITTLE, HAVE_MSU);
     else $display("FAIL: %0d errors (LITTLE=%0d HAVE_MSU=%0d)", errors, LITTLE, HAVE_MSU);
     $finish;

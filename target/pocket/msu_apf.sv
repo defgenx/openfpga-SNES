@@ -10,8 +10,17 @@ module msu_apf #(
     parameter [31:0] DATA_BRIDGE_ADDR = 32'h4000_0000,
     // Same bridge region as the data file; bit 27 routes the words to msu_audio
     parameter [31:0] AUDIO_BRIDGE_ADDR = 32'h4800_0000,
-    // Bytes of the .msu file that fit in SDRAM banks 2-3
+    // SDRAM banks 2-3 hold 2^RING_BITS bytes of the .msu file. A file up to DATA_MAX_SIZE is
+    // copied whole at boot; a larger one is streamed through them as a ring (file byte X at
+    // X mod 2^RING_BITS), see docs/MSU-1.md "Streaming"
+    parameter RING_BITS = 24,
     parameter [31:0] DATA_MAX_SIZE = 32'h0100_0000,
+    parameter [31:0] STREAM_CHUNK = 32'h0000_4000,  // bytes per APF read while streaming
+    parameter [31:0] STREAM_LEAD = 32'h0001_0000,  // buffered past a seek before it completes
+    parameter [31:0] STREAM_GUARD = 32'h0010_0000,  // ring space kept free behind the reader
+    // Read-ahead past the reader. Fetching only this far keeps SDRAM writes near the game's
+    // read rate, so they rarely compete with its reads
+    parameter [31:0] STREAM_AHEAD = 32'h0004_0000,
     // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
     parameter QUIET_BITS = 20,
     // Give up on an unanswered target command during the boot probe: Get/Open File after
@@ -64,7 +73,17 @@ module msu_apf #(
 
     // Audio sector read: 1024 bytes at sector * 1024
     input wire sector_req_toggle,
-    input wire [21:0] sector_num
+    input wire [21:0] sector_num,
+
+    // Streaming (.msu larger than DATA_MAX_SIZE): seek request toggle + offset in, response
+    // once STREAM_LEAD bytes past it are in SDRAM; the reader's position on request
+    output reg stream_mode = 0,
+    input wire data_seek_req_toggle,
+    input wire [31:0] data_seek_addr,
+    output reg data_seek_resp_toggle = 0,
+    output reg pos_req_toggle = 0,
+    input wire pos_ack_toggle,
+    input wire [31:0] pos_value
 );
   localparam S_IDLE = 0;
   localparam S_GETFILE_DONE = 1;
@@ -87,6 +106,8 @@ module msu_apf #(
   localparam S_CMD_WAIT_HIGH = 19;
   localparam S_DETECT_WAIT = 20;
   localparam S_DETECT = 21;
+  localparam S_POS_WAIT = 22;
+  localparam S_FETCH = 23;
 
   reg [4:0] state = S_IDLE;
   reg [4:0] cmd_return;
@@ -140,17 +161,23 @@ module msu_apf #(
 
   reg [2:0] track_req_s = 0;
   reg [2:0] sector_req_s = 0;
+  reg [2:0] data_seek_s = 0;
+  reg [2:0] pos_ack_s = 0;
   reg track_req_seen = 0;
   reg sector_req_seen = 0;
+  reg data_seek_seen = 0;
 
   always @(posedge clk_74a) begin
     track_req_s <= {track_req_s[1:0], track_req_toggle};
     sector_req_s <= {sector_req_s[1:0], sector_req_toggle};
+    data_seek_s <= {data_seek_s[1:0], data_seek_req_toggle};
+    pos_ack_s <= {pos_ack_s[1:0], pos_ack_toggle};
     endian_s <= {endian_s[1:0], bridge_endian_little};
   end
 
   wire track_pending = track_req_s[2] != track_req_seen;
   wire sector_pending = sector_req_s[2] != sector_req_seen;
+  wire data_seek_pending = data_seek_s[2] != data_seek_seen;
 
   ////////////////////////////////////////////////////////////////////////////
   // FSM
@@ -158,6 +185,7 @@ module msu_apf #(
   localparam OP_PROBE = 0;
   localparam OP_TRACK = 1;
   localparam OP_SECTOR = 2;
+  localparam OP_DATA = 3;  // streaming chunk
   reg [1:0] op = OP_PROBE;
 
   localparam CMD_READ = 0;
@@ -232,12 +260,26 @@ module msu_apf #(
   reg [31:0] read_length;
   reg [9:0] drain;
 
-  wire [15:0] opened_slot = op == OP_PROBE ? DATA_SLOT_ID : AUDIO_SLOT_ID;
+  wire [15:0] opened_slot = op == OP_PROBE || op == OP_DATA ? DATA_SLOT_ID : AUDIO_SLOT_ID;
+
+  localparam [31:0] RING_SIZE = 32'd1 << RING_BITS;
+  localparam [31:0] RING_MASK = RING_SIZE - 1'd1;
+
+  // Streaming window: file bytes [win_start, win_end) are in SDRAM
+  reg [31:0] data_size = 0;
+  reg [31:0] win_start = 0;
+  reg [31:0] win_end = 0;
+  reg [31:0] seek_target = 0;
+  reg seek_waiting = 0;
+  wire [31:0] stream_base = seek_waiting ? seek_target : pos_value;
+  wire [31:0] stream_base_w = {stream_base[31:2], 2'b00};  // the window is word-aligned
+  wire [31:0] stream_left = data_size - win_end;
 
   // core_bridge_cmd copies these when it starts the queued command; they hold until done
   assign target_dataslot_id = cmd == CMD_GETFILE ? 16'd0 : opened_slot;
   assign target_dataslot_slotoffset = read_offset;
-  assign target_dataslot_bridgeaddr = op == OP_PROBE ? DATA_BRIDGE_ADDR : AUDIO_BRIDGE_ADDR;
+  assign target_dataslot_bridgeaddr = op == OP_SECTOR ? AUDIO_BRIDGE_ADDR
+      : op == OP_DATA ? DATA_BRIDGE_ADDR + (read_offset & RING_MASK) : DATA_BRIDGE_ADDR;
   assign target_dataslot_length = read_length;
   wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], struct_little)+:8];
   wire [31:0] sector_offset = {sector_num, 10'b0};
@@ -267,6 +309,7 @@ module msu_apf #(
       probe_pending <= 1;
       msu_busy <= 1;
       msu_enable <= 0;
+      stream_mode <= 0;
       probe_status <= 0;
     end
 
@@ -299,10 +342,46 @@ module msu_apf #(
           audio_download <= 1;
           drain <= 0;
           state <= S_READ;
+        end else if (stream_mode && data_seek_pending) begin
+          // Keep the window when the seek lands inside it, else restart it there
+          data_seek_seen <= data_seek_s[2];
+          seek_target <= data_seek_addr;
+          seek_waiting <= 1;
+          if (data_seek_addr < win_start || data_seek_addr >= win_end) begin
+            win_start <= {data_seek_addr[31:2], 2'b00};
+            win_end <= {data_seek_addr[31:2], 2'b00};
+          end
+        end else if (stream_mode && seek_waiting
+            && (win_end >= seek_target + STREAM_LEAD || win_end >= data_size)) begin
+          seek_waiting <= 0;
+          data_seek_resp_toggle <= data_seek_seen;
+        end else if (stream_mode && win_end < data_size) begin
+          // Ask where the reader is, then decide whether to fetch the next chunk
+          pos_req_toggle <= ~pos_req_toggle;
+          state <= S_POS_WAIT;
         end else if (!msu_enable) begin
           // Requests while MSU is off are dropped, like hps_ext
           track_req_seen <= track_req_s[2];
           sector_req_seen <= sector_req_s[2];
+          data_seek_seen <= data_seek_s[2];
+        end
+      end
+
+      S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH;
+
+      S_FETCH: begin
+        state <= S_IDLE;
+        if (stream_base_w > win_end) begin
+          // The reader got past the window: refill from where it is
+          win_start <= stream_base_w;
+          win_end <= stream_base_w;
+        end else if (win_end - stream_base_w < STREAM_AHEAD
+            && win_end - stream_base_w < RING_SIZE - STREAM_GUARD) begin
+          op <= OP_DATA;
+          read_offset <= win_end;
+          read_length <= stream_left < STREAM_CHUNK ? stream_left : STREAM_CHUNK;
+          drain <= 0;
+          state <= S_READ;
         end
       end
 
@@ -460,9 +539,18 @@ module msu_apf #(
           else if (cmd_err == 3'd2) probe_status <= 4'd8;  // slot undefined
           else if (cmd_err == 3'd5) probe_status <= 4'd9;  // general error
           else probe_status <= 4'd10;
-          if (cmd_ok && slot_size != 0) begin
+          data_size <= slot_size;
+          win_start <= 0;
+          win_end <= 0;
+          seek_waiting <= 0;
+          if (cmd_ok && slot_size > DATA_MAX_SIZE) begin
+            // Too big to copy: stream it on demand from the first seek
+            stream_mode <= 1;
+            msu_busy <= 0;
+            state <= S_IDLE;
+          end else if (cmd_ok && slot_size != 0) begin
             read_offset <= 0;
-            read_length <= slot_size > DATA_MAX_SIZE ? DATA_MAX_SIZE : slot_size;
+            read_length <= slot_size;
             msu_data_download <= 1;
             drain <= 0;
             state <= S_READ;
@@ -498,6 +586,11 @@ module msu_apf #(
           msu_data_download <= 0;
           audio_download <= 0;
           if (op == OP_PROBE) msu_busy <= 0;
+          if (op == OP_DATA) begin
+            win_end <= win_end + read_length;
+            if (win_end + read_length - win_start > RING_SIZE - STREAM_GUARD)
+              win_start <= win_end + read_length - (RING_SIZE - STREAM_GUARD);
+          end
           state <= S_IDLE;
         end
       end

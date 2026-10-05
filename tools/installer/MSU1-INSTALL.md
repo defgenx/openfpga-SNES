@@ -29,8 +29,9 @@ Put the pack next to the ROM, with the same base name:
 ...
 ```
 
-The `.msu` data file is copied to memory at boot (a short black screen for large packs).
-Only its first 16MB are available. Both cores share ROMs and saves.
+A `.msu` data file up to 16MB is copied to memory at boot (a short black screen for large
+ones); a larger one, such as an FMV game's video, is streamed from the SD card while the game
+plays. Both cores share ROMs and saves.
 
 ## Troubleshooting
 

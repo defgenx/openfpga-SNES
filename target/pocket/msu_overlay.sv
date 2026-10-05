@@ -9,6 +9,7 @@ module msu_overlay (
     input wire [3:0] tstate,
     input wire seen_busy,
     input wire seen_ok,
+    input wire load_overflow,  // the store's write queue overflowed (streaming)
     output wire on,
     output wire [23:0] rgb
 );
@@ -53,7 +54,8 @@ module msu_overlay (
 
   reg [23:0] msu_handshake_rgb;
   always @(*) begin
-    if (tstate == 4'd14) msu_handshake_rgb = 24'hFF00FF;  // waiting for Ready to Run ack
+    if (load_overflow) msu_handshake_rgb = 24'hFFFFFF;  // streamed data lost
+    else if (tstate == 4'd14) msu_handshake_rgb = 24'hFF00FF;  // waiting for Ready to Run ack
     else if (tstate == 4'd15 && !seen_busy) msu_handshake_rgb = 24'hFF0000;  // posted, not picked up
     else if (tstate == 4'd15) msu_handshake_rgb = 24'hFFFF00;  // busy, not finished
     else if (seen_ok) msu_handshake_rgb = 24'h00FF00;  // idle, last command answered

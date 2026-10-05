@@ -62,7 +62,7 @@ The homebrew MSU-1 chip (CD-quality audio tracks and a streamed data file) is su
 
 To try it without touching the regular core, install the test build as a separate core, `defgenx.SNESMSU`. Unzip `defgenx.SNESMSU.zip` from the [releases](https://github.com/defgenx/openfpga-SNES/releases), then run `install.bat` on Windows, `install-linux.desktop` on Linux, or `./install.sh` in a terminal. To package one from a bitstream, use `tools/package-msu.sh`.
 
-MSU-1 is enabled when `<rom>.msu` exists. The data file is copied to memory at boot (expect a short black screen for large packs) and only its first 16MB are available; packs with larger data files, such as FMV games, will not work fully. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
+MSU-1 is enabled when `<rom>.msu` exists. A data file up to 16MB is copied to memory at boot (expect a short black screen for large ones). A larger one, such as an FMV game's video, is streamed from the SD card while the game plays. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
 
 ##### Troubleshooting MSU-1
 
@@ -93,10 +93,11 @@ Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small sq
 | Yellow | The Pocket accepted a request but has not finished it (a large `.msu` copy, for a few seconds) |
 | Red | A request is waiting and the Pocket has not picked it up |
 | Magenta | The Pocket never acknowledged the core at startup |
+| White | Streamed `.msu` data was lost (stays white until the next boot) |
 
 CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.
 
-FMV games such as Super Road Blaster keep their video in the `.msu` data file, which is far bigger than the 16MB the core can load. Frames past that point are garbage, and the game reports them, e.g. `video-frame FE01 of chapter B479 is bad`. Audio packs are not affected.
+FMV games such as Super Road Blaster stream their video from the `.msu` file. If the game reports bad video frames (e.g. `video-frame FE01 of chapter B479 is bad`), the stream did not keep up with it. With the debug squares on, a white right-hand square means streamed data was lost; please report it.
 
 ##### Building the MSU-1 core on Windows
 

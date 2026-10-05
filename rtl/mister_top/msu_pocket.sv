@@ -96,11 +96,23 @@ endmodule
 
 // The .msu data file in SDRAM banks 2-3 (16MB), reached through the controller's SNI
 // port, which waits for idle slots and so never disturbs ROM timing on port 0.
-// Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface.
-module msu_sdram_store (
+// Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface. In stream mode
+// the banks are a ring that msu_apf fills around the reader, see docs/MSU-1.md "Streaming".
+module msu_sdram_store #(
+    parameter RING_BITS = 24
+) (
     input wire clk_sys,
 
-    // Load: 32-bit words from msu_bridge_rx while msu_data_download
+    // Streaming: seeks wait for msu_apf to buffer data; it polls the read position
+    input wire stream_mode,  // already synchronized to clk_sys
+    output reg seek_req_toggle = 0,
+    output reg [31:0] seek_addr = 0,
+    input wire seek_resp_toggle,
+    input wire pos_req_toggle,
+    output reg pos_ack_toggle = 0,
+    output reg [31:0] pos_value = 0,
+
+    // Load: 32-bit words from msu_bridge_rx while msu_data_download, or any time streaming
     input wire msu_data_download,
     input wire load_valid,
     input wire [23:0] load_addr,
@@ -121,11 +133,34 @@ module msu_sdram_store (
     output reg sni_rd_req = 0,
     input wire sni_ready
 );
-  // One pending bridge word, written as two SNI words. The next one arrives ~20 clk_sys
-  // cycles later at the earliest, and the two writes need well under that.
-  reg [23:0] pend_addr = 0;
-  reg [31:0] pend_data = 0;
-  reg [1:0] pend_halves = 0;  // halves still to write
+  // Bridge words waiting for their two SNI writes. While streaming, the reader's prefetch
+  // goes first, so words can queue up behind it; data_loader-style backpressure is impossible.
+  reg [53:0] wq[0:7];  // {word address [23:2], data}
+  reg [2:0] wq_wp = 0;
+  reg [2:0] wq_rp = 0;
+  reg [3:0] wq_count = 0;
+  reg wq_half = 0;  // 1 once the low half of the head word is written
+  wire [21:0] pend_waddr = wq[wq_rp][53:32];
+  wire [31:0] pend_data = wq[wq_rp][31:0];
+
+  // Word addresses wrap at the ring size
+  localparam [22:0] WORD_MASK = (23'd1 << (RING_BITS - 1)) - 1'd1;
+  function automatic [22:0] wrap(input [22:0] w);
+    wrap = w & WORD_MASK;
+  endfunction
+
+  reg [2:0] seek_resp_s = 0;
+  reg [2:0] pos_req_s = 0;
+  reg stream_seek_wait = 0;
+  reg last_was_read = 0;
+  always @(posedge clk_sys) begin
+    seek_resp_s <= {seek_resp_s[1:0], seek_resp_toggle};
+    pos_req_s <= {pos_req_s[1:0], pos_req_toggle};
+    if (pos_req_s[2] != pos_ack_toggle) begin
+      pos_value <= rd_addr;
+      pos_ack_toggle <= pos_req_s[2];
+    end
+  end
 
   // Data cache: the word under rd_addr plus a prefetch of the next one
   reg [22:0] cur_word = 0;
@@ -133,7 +168,7 @@ module msu_sdram_store (
   reg [15:0] next_q = 0;
   reg next_valid = 0;
 
-  wire [22:0] rd_word = rd_addr[23:1];
+  wire [22:0] rd_word = wrap(rd_addr[23:1]);
   wire [15:0] rd_q = (rd_word == cur_word) ? cur_q : next_q;
   assign rd_dout = rd_addr[0] ? rd_q[15:8] : rd_q[7:0];
 
@@ -151,13 +186,19 @@ module msu_sdram_store (
   reg seek_pending = 0;
   reg old_seek = 0;
 
-  wire write_next = st == ST_IDLE && pend_halves != 0;
+  // The reader crossed into the prefetched word: shift it in and fetch the one after
+  wire prefetch_go = st == ST_IDLE && !msu_data_download && !seek_active && next_valid
+      && rd_word == wrap(cur_word + 1'd1);
+  wire write_next = st == ST_IDLE && wq_count != 0 && !prefetch_go;
+  wire load_accept = (msu_data_download || stream_mode) && load_valid;
 
   always @(posedge clk_sys) begin
-    if (msu_data_download && load_valid) begin
-      if (pend_halves != 0 && !(write_next && pend_halves == 2'd1)) load_overflow <= 1;
-      pend_addr <= load_addr;
-      pend_data <= load_data;
+    if (load_accept) begin
+      if (wq_count == 4'd8) load_overflow <= 1;
+      else begin
+        wq[wq_wp] <= {load_addr[23:2], load_data};
+        wq_wp <= wq_wp + 1'd1;
+      end
     end
 
     // A seek can start while a prefetch is in flight; remember it until ST_IDLE
@@ -167,15 +208,44 @@ module msu_sdram_store (
 
     case (st)
       ST_IDLE: begin
-        if (write_next) begin
+        if (prefetch_go) begin
+          // Reads crossed into the prefetched word: shift it in and prefetch the next. First, as
+          // the game reads without waiting; a pending write has until the next word to land
+          cur_word <= wrap(cur_word + 1'd1);
+          cur_q <= next_q;
+          next_valid <= 0;
+          sni_addr <= {1'b1, wrap(cur_word + 23'd2), 1'b0};
+          sni_rd_req <= 1;
+          dst <= DST_NEXT;
+          wait_cnt <= 0;
+          st <= ST_WAIT;
+        end else if (write_next) begin
           // Low half first, at the word's address; the high half follows at +2
-          sni_addr <= {1'b1, pend_addr[23:2], pend_halves == 2'd2 ? 2'b00 : 2'b10};
-          sni_din <= pend_halves == 2'd2 ? pend_data[15:0] : pend_data[31:16];
-          pend_halves <= pend_halves - 1'd1;
+          sni_addr <= {1'b1, wrap({pend_waddr, wq_half}), 1'b0};
+          sni_din <= wq_half ? pend_data[31:16] : pend_data[15:0];
+          wq_half <= ~wq_half;
+          if (wq_half) wq_rp <= wq_rp + 1'd1;
           sni_wr_req <= 1;
           wait_cnt <= 0;
           st <= ST_WAIT;
-        end else if (!msu_data_download && seek_pending) begin
+        end else if (!msu_data_download && seek_pending && stream_mode && !stream_seek_wait) begin
+          // Streaming: have msu_apf buffer from here first (data writes keep flowing meanwhile)
+          seek_pending <= 0;
+          seek_active <= 1;
+          rd_seek_done <= 0;
+          next_valid <= 0;
+          seek_addr <= rd_addr;
+          seek_req_toggle <= ~seek_req_toggle;
+          stream_seek_wait <= 1;
+        end else if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) begin
+          stream_seek_wait <= 0;
+          cur_word <= rd_word;
+          sni_addr <= {1'b1, rd_word, 1'b0};
+          sni_rd_req <= 1;
+          dst <= DST_CUR;
+          wait_cnt <= 0;
+          st <= ST_WAIT;
+        end else if (!msu_data_download && seek_pending && !stream_mode) begin
           // MSU.sv holds data_seek until rd_seek_done rises
           seek_pending <= 0;
           seek_active <= 1;
@@ -187,23 +257,15 @@ module msu_sdram_store (
           dst <= DST_CUR;
           wait_cnt <= 0;
           st <= ST_WAIT;
-        end else if (!msu_data_download && !seek_active && next_valid && rd_word == cur_word + 1'd1) begin
-          // Reads crossed into the prefetched word: shift it in and prefetch the next
-          cur_word <= cur_word + 1'd1;
-          cur_q <= next_q;
-          next_valid <= 0;
-          sni_addr <= {1'b1, cur_word + 23'd2, 1'b0};
-          sni_rd_req <= 1;
-          dst <= DST_NEXT;
-          wait_cnt <= 0;
-          st <= ST_WAIT;
         end
       end
 
       ST_WAIT: begin
-        // sni_ready drops within one clk_mem cycle of the request; skip the stale level
-        if (wait_cnt != 2'd2) wait_cnt <= wait_cnt + 1'd1;
+        // sni_ready drops one clk_mem cycle after the request and an access takes several,
+        // so it is low by the next clk_sys edge; skip that one stale cycle
+        if (wait_cnt != 2'd1) wait_cnt <= wait_cnt + 1'd1;
         else if (sni_ready) begin
+          last_was_read <= sni_rd_req;
           if (sni_rd_req) begin
             if (dst == DST_CUR) cur_q <= sni_dout;
             else begin
@@ -219,14 +281,15 @@ module msu_sdram_store (
 
       ST_ACK: begin
         st <= ST_IDLE;
-        if (seek_active && dst == DST_CUR && !rd_seek_done) begin
+        // Only a completed read advances a seek: streamed data writes also pass through here
+        if (last_was_read && seek_active && dst == DST_CUR && !rd_seek_done) begin
           // Seek: fetch the following word before reporting done
-          sni_addr <= {1'b1, cur_word + 23'd1, 1'b0};
+          sni_addr <= {1'b1, wrap(cur_word + 23'd1), 1'b0};
           sni_rd_req <= 1;
           dst <= DST_NEXT;
           wait_cnt <= 0;
           st <= ST_WAIT;
-        end else if (seek_active && dst == DST_NEXT && !rd_seek_done) begin
+        end else if (last_was_read && seek_active && dst == DST_NEXT && !rd_seek_done) begin
           rd_seek_done <= 1;
         end
       end
@@ -234,7 +297,6 @@ module msu_sdram_store (
       default: st <= ST_IDLE;
     endcase
 
-    // After the case so a new word wins over the decrement of the last half
-    if (msu_data_download && load_valid) pend_halves <= 2'd2;
+    wq_count <= wq_count + (load_accept && wq_count != 4'd8) - (write_next && wq_half);
   end
 endmodule

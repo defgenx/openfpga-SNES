@@ -70,6 +70,7 @@ Square 2 (x 72-103) shows `core_bridge_cmd`'s target command handshake:
 | Yellow | APF reported busy and has not finished |
 | Green | Idle, the last command was answered |
 | Blue | Idle, no command answered yet |
+| White | Streamed `.msu` data was lost: the SDRAM write queue overflowed (stays white) |
 
 `sim/overlay/tb_overlay.sv` checks the squares' placement behind `scanline_filler`.
 
@@ -78,6 +79,28 @@ Square 2 (x 72-103) shows `core_bridge_cmd`'s target command handshake:
 CPU turbo is forced off while MSU-1 is enabled, the way upstream forces it off for SA-1
 (`TURBO_ALLOW`). On hardware, an MSU-1 game with turbo on booted to a black screen, and another
 reported the MSU-1 chip missing.
+
+## Streaming
+
+A `.msu` file up to 16MB (`DATA_MAX_SIZE`) is copied whole at boot, and the game then reads
+it from SDRAM. A larger one, e.g. Super Road Blaster's video, is streamed instead:
+
+- **Ring:** SDRAM banks 2-3 become a ring, with file byte X at SDRAM address X mod 16MB
+  (`RING_BITS`). `msu_apf` tracks the file bytes `[win_start, win_end)` that are present.
+- **Seek:** `msu_sdram_store` forwards the seek to `msu_apf` (`data_seek_req_toggle`). If the
+  offset is outside the window, the window restarts there. The seek completes, and MSU-1's data
+  busy bit clears, once `STREAM_LEAD` (64KB) past it is in SDRAM.
+- **Read-ahead:** between other work, `msu_apf` polls the reader's position (`pos_req_toggle`)
+  and fetches the next `STREAM_CHUNK` (16KB) while the window ends less than `STREAM_AHEAD`
+  (256KB) past it. Capping read-ahead keeps SDRAM writes near the game's read rate. A full
+  16MB fill would compete with the game's reads for the SNI port.
+- **Priority:** `.pcm` sector requests go before data chunks. In `msu_sdram_store`, the
+  reader's next-word prefetch goes before pending writes, which wait in an 8-word queue.
+- **Underrun:** sequential reads cannot wait. If the game outruns the stream, it reads stale
+  data, and the window restarts at the reader's position. If the write queue overflows,
+  `load_overflow` turns the right-hand debug square white.
+
+`sim/msu` runs a 40,000-byte file through an 8KB ring (`le_stream`, `be_stream`).
 
 ## Memory
 
