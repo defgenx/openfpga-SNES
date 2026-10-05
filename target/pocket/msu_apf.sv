@@ -129,6 +129,7 @@ module msu_apf #(
   localparam S_PRELOAD = 24;
   localparam S_FETCH_CHECK = 25;
   localparam S_FETCH_GO = 26;
+  localparam S_SETTLE = 27;
 
   reg [4:0] state = S_IDLE;
   reg [4:0] cmd_return;
@@ -327,22 +328,51 @@ module msu_apf #(
       : copy_done0_s[2] == copy_req_toggle[0];
   reg [PW-1:0] seek_target = 0;
   reg seek_waiting = 0;
-  wire [PW-1:0] stream_base = seek_waiting ? seek_target : pos_value[OB-1:10];
+  wire [PW-1:0] stream_base_c = seek_waiting ? seek_target : pos_value[OB-1:10];
   wire [PW-1:0] stream_left = data_pages - fetch_end;
   wire [PW-1:0] seek_addr = data_seek_addr[OB-1:10];
   // Seeks get a short read so they complete quickly; read-ahead and the boot copy use chunks
   wire [3:0] chunk_limit = seek_waiting && !preloading ? LEAD_PAGES[3:0] : CHUNK_PAGES[3:0];
   wire last_chunk = stream_left <= chunk_limit;
-  wire [3:0] chunk_pages = last_chunk ? stream_left[3:0] : chunk_limit;
+  wire [3:0] chunk_pages_c = last_chunk ? stream_left[3:0] : chunk_limit;
   // The last read stops at the file's end; it is under 16KB, so 14 bits of the difference do
-  wire [13:0] chunk_length = last_chunk ? data_size_lo - {fetch_end[3:0], 10'b0} : {chunk_limit, 10'b0};
+  wire [13:0] chunk_length_c = last_chunk ? data_size_lo - {fetch_end[3:0], 10'b0} : {chunk_limit, 10'b0};
   assign copy_base = read_offset;
   assign copy_len = read_length;
   // Pages up to REGION_PAGES - GUARD_PAGES behind a window's end are still in its region
-  wire seek_restart = seek_addr < win_start || seek_addr >= fetch_end
+  wire seek_restart_c = seek_addr < win_start || seek_addr >= fetch_end
       || fetch_end - seek_addr >= REGION_PAGES - GUARD_PAGES;
-  wire seek_in_parked = seek_addr >= park_start && seek_addr < park_end
+  wire seek_in_parked_c = seek_addr >= park_start && seek_addr < park_end
       && park_end - seek_addr < REGION_PAGES - GUARD_PAGES;
+
+  // The comparisons above are registered so they stay off the 74MHz FSM paths. The FSM acts
+  // on them only once state has held a cycle (settled), so they reflect its last writes; the
+  // concurrent win_end advance only grows win_end, which can delay seek_done by a cycle.
+  reg [PW-1:0] stream_base = 0;
+  reg [3:0] chunk_pages = 0;
+  reg [13:0] chunk_length = 0;
+  reg seek_restart = 0, seek_in_parked = 0, seek_done = 0, more_to_fetch = 0;
+  reg past_fetch = 0, ahead_ok = 0, behind_win = 0;
+  reg [5:0] fill_c = 0;
+  reg [4:0] prev_state = 0;
+  wire settled = prev_state == state;
+  always @(posedge clk_74a) begin
+    prev_state <= state;
+    stream_base <= stream_base_c;
+    chunk_pages <= chunk_pages_c;
+    chunk_length <= chunk_length_c;
+    seek_restart <= seek_restart_c;
+    seek_in_parked <= seek_in_parked_c;
+    seek_done <= win_end >= seek_target + LEAD_PAGES[PW-1:0] || win_end >= data_pages;
+    more_to_fetch <= fetch_end < data_pages;
+    past_fetch <= stream_base_c > fetch_end;
+    ahead_ok <= fetch_end - stream_base_c < AHEAD_PAGES;  // < ring size
+    behind_win <= stream_base_c > win_end;
+    fill_c <= stream_base_c > win_end ? 6'd0
+        : win_end - stream_base_c >= AHEAD_PAGES ? 6'd63
+        : 6'((win_end - stream_base_c) >> ($clog2(AHEAD_PAGES) - 6));
+  end
+
   assign copy_region = act_region;
   assign seek_region = act_region;
 
@@ -397,7 +427,7 @@ module msu_apf #(
     end
 
     case (state)
-      S_IDLE: begin
+      S_IDLE: if (settled) begin
         if (probe_pending && &quiet && core_running) begin
           probe_pending <= 0;
           op <= OP_PROBE;
@@ -443,11 +473,12 @@ module msu_apf #(
               fetch_end <= seek_addr;
             end
           end
-        end else if (stream_mode && seek_waiting
-            && (win_end >= seek_target + LEAD_PAGES[PW-1:0] || win_end >= data_pages)) begin
+          state <= S_SETTLE;
+        end else if (stream_mode && seek_waiting && seek_done) begin
           seek_waiting <= 0;
           data_seek_resp_toggle <= data_seek_seen;
-        end else if (stream_mode && bank_free && fetch_end < data_pages) begin
+          state <= S_SETTLE;
+        end else if (stream_mode && bank_free && more_to_fetch) begin
           // Ask where the reader is, then decide whether to fetch the next chunk
           pos_req_toggle <= ~pos_req_toggle;
           state <= S_POS_WAIT;
@@ -459,6 +490,8 @@ module msu_apf #(
         end
       end
 
+      S_SETTLE: state <= S_IDLE;
+
       S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH_CHECK;
 
       // A position taken during a seek says nothing about the active window; the seek itself
@@ -467,11 +500,9 @@ module msu_apf #(
 
       S_FETCH_GO: begin
         state <= S_IDLE;
-        stream_fill <= stream_base > win_end ? 6'd0
-            : win_end - stream_base >= AHEAD_PAGES ? 6'd63
-            : 6'((win_end - stream_base) >> ($clog2(AHEAD_PAGES) - 6));
-        if (stream_base > win_end && !seek_waiting) stream_underrun <= 1;
-        if (stream_base > fetch_end) begin
+        stream_fill <= fill_c;
+        if (behind_win && !seek_waiting) stream_underrun <= 1;
+        if (past_fetch) begin
           // The reader got past everything fetched: refill from where it is, once the chunk
           // being copied is in
           if (!any_outstanding) begin
@@ -479,7 +510,7 @@ module msu_apf #(
             win_end <= stream_base;
             fetch_end <= stream_base;
           end
-        end else if (fetch_end - stream_base < AHEAD_PAGES && bank_free) begin  // < ring size
+        end else if (ahead_ok && bank_free) begin
           op <= OP_DATA;
           read_page <= fetch_end;
           read_length <= chunk_length;
@@ -692,7 +723,9 @@ module msu_apf #(
 
       // Boot copy of a small .msu: chunk by chunk through the bounce buffer
       S_PRELOAD: begin
-        if (fetch_end >= data_pages) begin
+        if (!settled) begin
+          // chunk_* and more_to_fetch catch up with S_DRAIN's fetch_end
+        end else if (!more_to_fetch) begin
           if (!any_outstanding) begin
             preloading <= 0;
             msu_data_download <= 0;
