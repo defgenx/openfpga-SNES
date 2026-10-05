@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install SNES MSU-1 core on the Pocket SD card
+Comment=Runs install.sh from this folder in a terminal
+Exec=sh -c 'cd "$(dirname "$1")" && bash ./install.sh; echo; read -p "Press Enter to close " _' sh %k
+Terminal=true
+Icon=media-flash

@@ -148,17 +148,16 @@ module MAIN_SNES (
     output wire [15:0] audio_r,
 
     // MSU-1, see docs/MSU-1.md. Levels come from clk_74a (msu_apf) and are synchronized
-    // here; the write strobes come from data_loader and are already in clk_sys.
+    // here; the received words come from msu_bridge_rx and are already in clk_sys.
     input wire msu_enable,
     input wire msu_busy,
     input wire msu_data_download,
     input wire msu_audio_download,
 
-    input wire msu_data_wr,
-    input wire [23:0] msu_data_wr_addr,
-    input wire [15:0] msu_data_wr_data,
-    input wire msu_audio_wr,
-    input wire [15:0] msu_audio_wr_data,
+    // Bridge words: bit 27 of the address set = .pcm sector, clear = .msu data
+    input wire msu_rx_valid,
+    input wire [27:0] msu_rx_addr,
+    input wire [31:0] msu_rx_data,
 
     output wire msu_track_req_toggle,
     output wire [15:0] msu_track_req_num,
@@ -1097,6 +1096,9 @@ module MAIN_SNES (
   wire [15:0] msu_l;
   wire [15:0] msu_r;
 
+  wire        msu_audio_wr;
+  wire [15:0] msu_audio_wr_data;
+
   generate
     if (USE_MSU == 1'b1) begin : msu
       msu_host msu_host (
@@ -1109,6 +1111,11 @@ module MAIN_SNES (
           .msu_audio_seek(msu_audio_seek),
           .msu_audio_sector(msu_audio_sector),
           .msu_audio_download(msu_audio_download_s),
+
+          .rx_valid(msu_rx_valid & msu_rx_addr[27]),
+          .rx_data(msu_rx_data),
+          .msu_audio_wr(msu_audio_wr),
+          .msu_audio_data(msu_audio_wr_data),
 
           .msu_track_mounting(msu_track_mounting),
           .msu_track_missing(msu_track_missing),
@@ -1158,9 +1165,9 @@ module MAIN_SNES (
           .clk_sys(clk_sys),
 
           .msu_data_download(msu_data_download_s),
-          .load_wr(msu_data_wr),
-          .load_addr(msu_data_wr_addr),
-          .load_data(msu_data_wr_data),
+          .load_valid(msu_rx_valid & ~msu_rx_addr[27]),
+          .load_addr(msu_rx_addr[23:0]),
+          .load_data(msu_rx_data),
           .load_overflow(),
 
           .rd_addr(msu_data_addr),
@@ -1195,6 +1202,8 @@ module MAIN_SNES (
       assign msu_track_req_num = 0;
       assign msu_sector_req_toggle = 0;
       assign msu_sector_req_num = 0;
+      assign msu_audio_wr = 0;
+      assign msu_audio_wr_data = 0;
     end
   endgenerate
 

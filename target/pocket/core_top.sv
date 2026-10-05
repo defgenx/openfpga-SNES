@@ -712,35 +712,23 @@ module core_top (
       .sector_num(msu_sector_req_num)
   );
 
-  // One loader for both streams: 0x4000_0000 + offset is .msu data, 0x4800_0000 a .pcm sector
-  wire msu_loader_wr;
-  wire [27:0] msu_loader_addr;
-  wire [15:0] msu_loader_data;
+  // Region 0x4 words: 0x4000_0000 + offset is .msu data, 0x4800_0000 a .pcm sector
+  wire msu_rx_valid;
+  wire [27:0] msu_rx_addr;
+  wire [31:0] msu_rx_data;
 
-  data_loader #(
-      .ADDRESS_MASK_UPPER_4(4'h4),
-      .ADDRESS_SIZE(28),
-      .WRITE_MEM_CLOCK_DELAY(7),
-      .OUTPUT_WORD_SIZE(2)
-  ) msu_loader (
+  msu_bridge_rx msu_bridge_rx (
       .clk_74a(clk_74a),
-      .clk_memory(clk_sys_21_48),
-
-      .bridge_wr(bridge_wr),
       .bridge_endian_little(bridge_endian_little),
       .bridge_addr(bridge_addr),
+      .bridge_wr(bridge_wr),
       .bridge_wr_data(bridge_wr_data),
 
-      .write_en  (msu_loader_wr),
-      .write_addr(msu_loader_addr),
-      .write_data(msu_loader_data)
+      .clk_sys (clk_sys_21_48),
+      .rx_valid(msu_rx_valid),
+      .rx_addr (msu_rx_addr),
+      .rx_data (msu_rx_data)
   );
-
-  wire msu_data_wr = msu_loader_wr & ~msu_loader_addr[27];
-  wire [23:0] msu_data_wr_addr = msu_loader_addr[23:0];
-  wire [15:0] msu_data_wr_data = msu_loader_data;
-  wire msu_audio_wr = msu_loader_wr & msu_loader_addr[27];
-  wire [15:0] msu_audio_wr_data = msu_loader_data;
 
   wire [15:0] audio_l;
   wire [15:0] audio_r;
@@ -1044,11 +1032,9 @@ module core_top (
       .msu_data_download(msu_data_download),
       .msu_audio_download(msu_audio_download),
 
-      .msu_data_wr(msu_data_wr),
-      .msu_data_wr_addr(msu_data_wr_addr),
-      .msu_data_wr_data(msu_data_wr_data),
-      .msu_audio_wr(msu_audio_wr),
-      .msu_audio_wr_data(msu_audio_wr_data),
+      .msu_rx_valid(msu_rx_valid),
+      .msu_rx_addr(msu_rx_addr),
+      .msu_rx_data(msu_rx_data),
 
       .msu_track_req_toggle(msu_track_req_toggle),
       .msu_track_req_num(msu_track_req_num),

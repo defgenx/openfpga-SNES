@@ -79,3 +79,4 @@ cr_ie_info.json
 sim/msu/build/
 sim/msu/*.vcd
 build/
+release/

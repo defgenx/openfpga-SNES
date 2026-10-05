@@ -8,7 +8,7 @@ module msu_apf #(
     parameter [15:0] AUDIO_SLOT_ID = 16'd21,
     parameter [3:0] SCRATCH_REGION = 4'h3,
     parameter [31:0] DATA_BRIDGE_ADDR = 32'h4000_0000,
-    // Same data_loader as the data file; bit 27 routes the words to msu_audio
+    // Same bridge region as the data file; bit 27 routes the words to msu_audio
     parameter [31:0] AUDIO_BRIDGE_ADDR = 32'h4800_0000,
     // Bytes of the .msu file that fit in SDRAM banks 2-3
     parameter [31:0] DATA_MAX_SIZE = 32'h0100_0000,
@@ -36,10 +36,10 @@ module msu_apf #(
     output reg target_dataslot_openfile = 0,
     input wire target_dataslot_done,
     input wire [2:0] target_dataslot_err,
-    output reg [15:0] target_dataslot_id = 0,
-    output reg [31:0] target_dataslot_slotoffset = 0,
-    output reg [31:0] target_dataslot_bridgeaddr = 0,
-    output reg [31:0] target_dataslot_length = 0,
+    output wire [15:0] target_dataslot_id,
+    output wire [31:0] target_dataslot_slotoffset,
+    output wire [31:0] target_dataslot_bridgeaddr,
+    output wire [31:0] target_dataslot_length,
 
     // Data slot size table (core_bridge_cmd port A); core_top yields it while dt_active
     output reg dt_active = 0,
@@ -209,6 +209,12 @@ module msu_apf #(
   reg [9:0] drain;
 
   wire [15:0] opened_slot = op == OP_PROBE ? DATA_SLOT_ID : AUDIO_SLOT_ID;
+
+  // core_bridge_cmd copies these when it starts the queued command; they hold until done
+  assign target_dataslot_id = cmd == CMD_GETFILE ? 16'd0 : opened_slot;
+  assign target_dataslot_slotoffset = read_offset;
+  assign target_dataslot_bridgeaddr = op == OP_PROBE ? DATA_BRIDGE_ADDR : AUDIO_BRIDGE_ADDR;
+  assign target_dataslot_length = read_length;
   wire [7:0] scan_byte = fsm_q[lane_shift(idx[1:0], little)+:8];
   wire [31:0] sector_offset = {sector_num, 10'b0};
   // Full sectors, then the remainder, then nothing past the end
@@ -248,7 +254,6 @@ module msu_apf #(
           probe_pending <= 0;
           op <= OP_PROBE;
           cmd <= CMD_GETFILE;
-          target_dataslot_id <= 0;
           cmd_return <= S_GETFILE_DONE;
           state <= S_CMD;
         end else if (msu_enable && track_pending) begin
@@ -365,7 +370,6 @@ module msu_apf #(
         if (idx == 0) idx <= 1;
         else begin
           cmd <= CMD_OPENFILE;
-          target_dataslot_id <= opened_slot;
           cmd_return <= S_OPEN_DONE;
           state <= S_CMD;
         end
@@ -434,10 +438,6 @@ module msu_apf #(
             state <= S_DRAIN;
           end else begin
             cmd <= CMD_READ;
-            target_dataslot_id <= opened_slot;
-            target_dataslot_slotoffset <= read_offset;
-            target_dataslot_bridgeaddr <= op == OP_PROBE ? DATA_BRIDGE_ADDR : AUDIO_BRIDGE_ADDR;
-            target_dataslot_length <= read_length;
             cmd_return <= S_DRAIN;
             state <= S_CMD;
           end
@@ -492,4 +492,48 @@ module msu_apf #(
     endcase
   end
 
+endmodule
+
+// Bridge writes to region 0x4 (.msu data and .pcm sectors) handed to clk_sys one 32-bit word
+// at a time. APF writes at most every ~75 clk_74a cycles, so a toggle handshake replaces
+// data_loader's dual-clock FIFO; the word and address are held until the next write.
+module msu_bridge_rx #(
+    parameter [3:0] REGION = 4'h4
+) (
+    input wire clk_74a,
+    input wire bridge_endian_little,
+    input wire [31:0] bridge_addr,
+    input wire bridge_wr,
+    input wire [31:0] bridge_wr_data,
+
+    input wire clk_sys,
+    output reg rx_valid = 0,  // one clk_sys pulse per word
+    output reg [27:0] rx_addr = 0,
+    output reg [31:0] rx_data = 0  // file byte n at [8n+7:8n], as data_loader unpacks it
+);
+  reg prev_wr = 0;
+  reg toggle = 0;
+  reg [27:0] held_addr = 0;
+  reg [31:0] held_data = 0;
+
+  always @(posedge clk_74a) begin
+    prev_wr <= bridge_wr;
+    if (bridge_wr && !prev_wr && bridge_addr[31:28] == REGION) begin
+      held_addr <= bridge_addr[27:0];
+      held_data <= bridge_endian_little ? bridge_wr_data : {
+        bridge_wr_data[7:0], bridge_wr_data[15:8], bridge_wr_data[23:16], bridge_wr_data[31:24]
+      };
+      toggle <= ~toggle;
+    end
+  end
+
+  reg [2:0] toggle_s = 0;
+  always @(posedge clk_sys) begin
+    toggle_s <= {toggle_s[1:0], toggle};
+    rx_valid <= toggle_s[2] != toggle_s[1];
+    if (toggle_s[2] != toggle_s[1]) begin
+      rx_addr <= held_addr;
+      rx_data <= held_data;
+    end
+  end
 endmodule

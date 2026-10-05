@@ -14,6 +14,12 @@ module msu_host (
     input wire [21:0] msu_audio_sector,
     input wire msu_audio_download,  // already synchronized to clk_sys
 
+    // .pcm words from msu_bridge_rx, split into msu_audio's 16-bit ioctl writes
+    input wire rx_valid,
+    input wire [31:0] rx_data,
+    output reg msu_audio_wr = 0,
+    output reg [15:0] msu_audio_data = 0,
+
     output reg msu_track_mounting = 0,
     output reg msu_track_missing = 0,
     output reg [31:0] msu_audio_size = 0,
@@ -34,8 +40,22 @@ module msu_host (
   reg old_seek = 0;
   reg old_track_request = 0;
   reg old_download = 0;
+  reg [15:0] audio_hi = 0;
+  reg audio_hi_pending = 0;
 
   always @(posedge clk_sys) begin
+    msu_audio_wr <= 0;
+    if (rx_valid) begin
+      msu_audio_wr <= 1;
+      msu_audio_data <= rx_data[15:0];
+      audio_hi <= rx_data[31:16];
+      audio_hi_pending <= 1;
+    end else if (audio_hi_pending) begin
+      msu_audio_wr <= 1;
+      msu_audio_data <= audio_hi;
+      audio_hi_pending <= 0;
+    end
+
     track_resp_s <= {track_resp_s[1:0], track_resp_toggle};
 
     old_download <= msu_audio_download;
@@ -80,11 +100,11 @@ endmodule
 module msu_sdram_store (
     input wire clk_sys,
 
-    // Load: 16-bit words from data_loader while msu_data_download
+    // Load: 32-bit words from msu_bridge_rx while msu_data_download
     input wire msu_data_download,
-    input wire load_wr,
+    input wire load_valid,
     input wire [23:0] load_addr,
-    input wire [15:0] load_data,
+    input wire [31:0] load_data,
     output reg load_overflow = 0,
 
     // MSU.sv data port
@@ -101,11 +121,11 @@ module msu_sdram_store (
     output reg sni_rd_req = 0,
     input wire sni_ready
 );
-  // Loader FIFO: SNI writes can be delayed by refresh, data_loader cannot be stalled
-  reg [39:0] fifo[0:3];
-  reg [1:0] fifo_wp = 0;
-  reg [1:0] fifo_rp = 0;
-  reg [2:0] fifo_count = 0;
+  // One pending bridge word, written as two SNI words. The next one arrives ~20 clk_sys
+  // cycles later at the earliest, and the two writes need well under that.
+  reg [23:0] pend_addr = 0;
+  reg [31:0] pend_data = 0;
+  reg [1:0] pend_halves = 0;  // halves still to write
 
   // Data cache: the word under rd_addr plus a prefetch of the next one
   reg [22:0] cur_word = 0;
@@ -131,18 +151,14 @@ module msu_sdram_store (
   reg seek_pending = 0;
   reg old_seek = 0;
 
-  wire fifo_push = msu_data_download && load_wr;
-  wire fifo_pop = st == ST_IDLE && fifo_count != 0;
+  wire write_next = st == ST_IDLE && pend_halves != 0;
 
   always @(posedge clk_sys) begin
-    if (fifo_push) begin
-      if (fifo_count == 4 && !fifo_pop) load_overflow <= 1;
-      else begin
-        fifo[fifo_wp] <= {load_addr, load_data};
-        fifo_wp <= fifo_wp + 1'd1;
-      end
+    if (msu_data_download && load_valid) begin
+      if (pend_halves != 0 && !(write_next && pend_halves == 2'd1)) load_overflow <= 1;
+      pend_addr <= load_addr;
+      pend_data <= load_data;
     end
-    fifo_count <= fifo_count + (fifo_push && !(fifo_count == 4 && !fifo_pop)) - fifo_pop;
 
     // A seek can start while a prefetch is in flight; remember it until ST_IDLE
     old_seek <= rd_seek;
@@ -151,11 +167,12 @@ module msu_sdram_store (
 
     case (st)
       ST_IDLE: begin
-        if (fifo_pop) begin
-          sni_addr <= {1'b1, fifo[fifo_rp][39:16]};
-          sni_din <= fifo[fifo_rp][15:0];
+        if (write_next) begin
+          // Low half first, at the word's address; the high half follows at +2
+          sni_addr <= {1'b1, pend_addr[23:2], pend_halves == 2'd2 ? 2'b00 : 2'b10};
+          sni_din <= pend_halves == 2'd2 ? pend_data[15:0] : pend_data[31:16];
+          pend_halves <= pend_halves - 1'd1;
           sni_wr_req <= 1;
-          fifo_rp <= fifo_rp + 1'd1;
           wait_cnt <= 0;
           st <= ST_WAIT;
         end else if (!msu_data_download && seek_pending) begin
@@ -216,5 +233,8 @@ module msu_sdram_store (
 
       default: st <= ST_IDLE;
     endcase
+
+    // After the case so a new word wins over the decrement of the last half
+    if (msu_data_download && load_valid) pend_halves <= 2'd2;
   end
 endmodule

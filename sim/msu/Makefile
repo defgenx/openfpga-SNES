@@ -1,7 +1,6 @@
 ROOT := ../..
 SRCS := stubs.v tb_msu.sv \
 	$(ROOT)/target/pocket/msu_apf.sv \
-	$(ROOT)/target/pocket/data_loader.sv \
 	$(ROOT)/target/pocket/core_bridge_cmd.v \
 	$(ROOT)/platform/pocket/common.v \
 	$(ROOT)/rtl/mister_top/msu_pocket.sv \

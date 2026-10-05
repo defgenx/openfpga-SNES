@@ -50,8 +50,12 @@ APF requires every slot the core opens to be declared.
 | `0x4000_0000` + offset | `.msu` contents → `data_loader` → `msu_sdram_store` → SDRAM |
 | `0x4800_0000` | `.pcm` sector → the same `data_loader` → `msu_audio` (the `ioctl` stream on MiSTer) |
 
-One `data_loader` serves both streams. Bit 27 of its output address picks the destination,
-which saves a second loader's FIFO; the 16MB data cap keeps data offsets below bit 27.
+Region `0x4` goes through `msu_bridge_rx` (in `msu_apf.sv`), not `data_loader`. It hands each
+32-bit word to `clk_sys` with a toggle handshake instead of a dual-clock FIFO. Bit 27 of the
+address picks the destination; the 16MB data cap keeps data offsets below bit 27. This relies on
+APF's ~75 `clk_74a` cycles between bridge writes, the same assumption `data_loader` makes.
+`msu_sdram_store` must finish the word's two SNI writes before the next one arrives. If it does
+not, it sets `load_overflow`, which nothing reads on hardware; the sim fails on it.
 
 `core_top.sv` gives the data slot table's port A to `msu_apf` while `dt_active` is set; the rest
 of the time, that port reports the save size.
