@@ -19,6 +19,22 @@
         "extensions": ["sav", "srm"],
         "address": "0x20000000",
         "size_maximum": "0x20000"
+      },
+      {
+        "name": "MSU-1 Data",
+        "id": 20,
+        "required": false,
+        "parameters": "0x8",
+        "deferload": true,
+        "extensions": ["msu"]
+      },
+      {
+        "name": "MSU-1 Audio",
+        "id": 21,
+        "required": false,
+        "parameters": "0x8",
+        "deferload": true,
+        "extensions": ["pcm"]
       }
     ]
   }

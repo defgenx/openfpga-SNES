@@ -75,3 +75,10 @@ cr_ie_info.json
 # ROMS Checklist
 !checklist.sha1
 !checklist.md5
+
+sim/msu/build/
+sim/msu/*.vcd
+build/
+release/
+sim/overlay/build/
+sim/overlay/build.log

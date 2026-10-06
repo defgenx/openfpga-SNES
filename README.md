@@ -44,7 +44,26 @@ All original expansion chips supported by MiSTer are also supported on the Pocke
 * ST1010 (F1 Roc 2)
 * BSX (Satellaview)
 
-The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi Nidan Morita Shougi 2) are not supported in the MiSTer core, and therefore are not supported here. Additionally, the homebrew MSU expansion chip is not currently supported.
+The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi Nidan Morita Shougi 2) are not supported in the MiSTer core, and therefore are not supported here.
+
+#### MSU-1
+
+> **Warning**: Experimental
+
+MSU-1 (CD-quality audio tracks and a data file) is supported in all bitstreams, with the MiSTer naming scheme. Put the pack next to the ROM, with the same base name:
+
+```
+/Assets/snes/common/Zelda MSU/zelda.sfc
+/Assets/snes/common/Zelda MSU/zelda.msu      (required, may be empty)
+/Assets/snes/common/Zelda MSU/zelda-1.pcm
+/Assets/snes/common/Zelda MSU/zelda-2.pcm
+```
+
+A `.msu` up to 8MB is copied to memory at boot; a larger one (FMV games) is streamed from the SD card, and the game is briefly frozen when the card falls behind. CPU turbo is off while MSU-1 is enabled.
+
+The test builds install as a separate core, `defgenx.SNESMSU`, next to the regular one: unzip `defgenx.SNESMSU.zip` from the [releases](https://github.com/defgenx/openfpga-SNES/releases) and run `install.bat` (Windows) or `./install.sh`. `tools/build-windows.bat` builds and installs it with a local Quartus 21.1.
+
+Debug builds have a **MSU-1 Debug Squares** setting. The left square is the boot detection: green found, red `<rom>.msu` not found (check the names), gray in progress, any other colour an APF error. The right square is the longest streaming seek: green under 10ms, yellow under 30ms, red longer, orange if the stream fell behind the game.
 
 #### BSX
 

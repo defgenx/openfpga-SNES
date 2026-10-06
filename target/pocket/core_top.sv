@@ -326,6 +326,10 @@ module core_top (
     if (bridge_addr[31:28] == 4'h2) begin
       bridge_rd_data <= sd_read_data;
     end
+
+    if (bridge_addr[31:28] == 4'h3) begin
+      bridge_rd_data <= msu_scratch_rd_data;
+    end
   end
 
   always @(posedge clk_74a) begin
@@ -381,6 +385,9 @@ module core_top (
         end
         32'h204: begin
           blend_enabled <= bridge_wr_data[0];
+        end
+        32'h300: begin
+          msu_debug_squares <= bridge_wr_data[0];
         end
       endcase
     end
@@ -493,6 +500,24 @@ module core_top (
       .savestate_load_err (savestate_load_err),
 
       .osnotify_inmenu(osnotify_inmenu),
+
+      .target_dataslot_read(msu_target_read),
+      .target_dataslot_write(1'b0),
+      .target_dataslot_getfile(msu_target_getfile),
+      .target_dataslot_openfile(msu_target_openfile),
+
+      .target_dataslot_ack(),
+      .target_dataslot_done(target_dataslot_done),
+      .target_dataslot_err(target_dataslot_err),
+
+      .target_dataslot_id(msu_target_id),
+      .target_dataslot_slotoffset(msu_target_slotoffset),
+      .target_dataslot_bridgeaddr(msu_target_bridgeaddr),
+      .target_dataslot_length(msu_target_length),
+
+
+      .target_buffer_param_struct(32'h3000_0000),
+      .target_buffer_resp_struct(32'h3000_0000),
 
       .datatable_addr(datatable_addr),
       .datatable_wren(datatable_wren),
@@ -607,6 +632,10 @@ module core_top (
       datatable_addr <= 0;
       datatable_data <= 0;
       datatable_wren <= 0;
+    end else if (msu_dt_active) begin
+      // msu_apf is reading a data slot size
+      datatable_wren <= 0;
+      datatable_addr <= msu_dt_addr;
     end else begin
       // Write sram size half of the time
       datatable_wren <= 1;
@@ -616,6 +645,144 @@ module core_top (
       datatable_addr <= 1 * 2 + 1;
     end
   end
+
+  ////////////////////////////  MSU-1  ////////////////////////////////////
+  // Bridge regions: 0x3 filename structs, 0x4 the bounce buffer
+
+  wire target_dataslot_done;
+  wire [2:0] target_dataslot_err;
+
+  wire msu_target_read;
+  wire msu_target_getfile;
+  wire msu_target_openfile;
+  wire [15:0] msu_target_id;
+  wire [31:0] msu_target_slotoffset;
+  wire [31:0] msu_target_bridgeaddr;
+  wire [31:0] msu_target_length;
+
+  wire msu_dt_active;
+  wire [9:0] msu_dt_addr;
+  wire [31:0] msu_scratch_rd_data;
+
+  wire msu_busy;
+  wire msu_enable;
+  wire msu_data_download;
+  wire msu_audio_download;
+  wire [3:0] msu_probe_status;
+
+  wire msu_track_req_toggle;
+  wire [15:0] msu_track_req_num;
+  wire msu_track_resp_toggle;
+  wire [31:0] msu_track_resp_size;
+  wire msu_sector_req_toggle;
+  wire [21:0] msu_sector_req_num;
+
+  wire msu_stream_mode;
+  wire [1:0] msu_seek_slowest;
+  wire msu_copy_audio;
+  wire msu_replay_req_toggle;
+  wire [9:0] msu_replay_slot;
+  wire [10:0] msu_replay_len;
+  wire msu_replay_done_toggle;
+  wire msu_stream_underrun;
+  wire [5:0] msu_stream_fill;
+  wire msu_data_seek_req_toggle;
+  wire [31:0] msu_data_seek_addr;
+  wire msu_data_seek_resp_toggle;
+  wire msu_pos_req_toggle;
+  wire msu_pos_ack_toggle;
+  wire [31:0] msu_pos_value;
+  wire msu_pos_seeking;
+  wire [1:0] msu_copy_req_toggle;
+  wire msu_copy_region;
+  wire msu_seek_region;
+  wire [31:0] msu_copy_base;
+  wire [13:0] msu_copy_len;
+  wire [1:0] msu_fill_done_toggle;
+  wire [1:0] msu_copy_done_toggle;
+
+  msu_apf msu_apf (
+      .clk_74a(clk_74a),
+
+      .ioctl_download(ioctl_download),
+      .core_running  (reset_n),
+
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_rd(bridge_rd),
+      .bridge_wr(bridge_wr),
+      .bridge_wr_data(bridge_wr_data),
+      .scratch_rd_data(msu_scratch_rd_data),
+
+      .target_dataslot_read(msu_target_read),
+      .target_dataslot_getfile(msu_target_getfile),
+      .target_dataslot_openfile(msu_target_openfile),
+      .target_dataslot_done(target_dataslot_done),
+      .target_dataslot_err(target_dataslot_err),
+      .target_dataslot_id(msu_target_id),
+      .target_dataslot_slotoffset(msu_target_slotoffset),
+      .target_dataslot_bridgeaddr(msu_target_bridgeaddr),
+      .target_dataslot_length(msu_target_length),
+
+      .dt_active(msu_dt_active),
+      .dt_addr  (msu_dt_addr),
+      .dt_q     (datatable_q),
+
+      .msu_busy(msu_busy),
+      .msu_enable(msu_enable),
+      .msu_data_download(msu_data_download),
+      .audio_download(msu_audio_download),
+      .probe_status(msu_probe_status),
+
+      .track_req_toggle(msu_track_req_toggle),
+      .track_num(msu_track_req_num),
+      .track_resp_toggle(msu_track_resp_toggle),
+      .track_size(msu_track_resp_size),
+
+      .sector_req_toggle(msu_sector_req_toggle),
+      .sector_num(msu_sector_req_num),
+
+      .stream_mode(msu_stream_mode),
+      .stream_underrun(msu_stream_underrun),
+      .stream_fill(msu_stream_fill),
+      .data_seek_req_toggle(msu_data_seek_req_toggle),
+      .data_seek_addr(msu_data_seek_addr),
+      .data_seek_resp_toggle(msu_data_seek_resp_toggle),
+      .pos_req_toggle(msu_pos_req_toggle),
+      .pos_ack_toggle(msu_pos_ack_toggle),
+      .pos_value(msu_pos_value),
+      .pos_seeking(msu_pos_seeking),
+
+      .copy_req_toggle(msu_copy_req_toggle),
+      .copy_region(msu_copy_region),
+      .seek_region(msu_seek_region),
+      .copy_base(msu_copy_base),
+      .copy_len(msu_copy_len),
+      .fill_done_toggle(msu_fill_done_toggle),
+      .copy_done_toggle(msu_copy_done_toggle),
+      .copy_audio(msu_copy_audio),
+      .replay_req_toggle(msu_replay_req_toggle),
+      .replay_slot(msu_replay_slot),
+      .replay_len(msu_replay_len),
+      .replay_done_toggle(msu_replay_done_toggle)
+  );
+
+  wire msu_rx_valid;
+  wire [13:0] msu_rx_addr;
+  wire [31:0] msu_rx_data;
+
+  msu_bridge_rx msu_bridge_rx (
+      .clk_74a(clk_74a),
+      .bridge_endian_little(bridge_endian_little),
+      .bridge_addr(bridge_addr),
+      .bridge_wr(bridge_wr),
+      .bridge_wr_data(bridge_wr_data),
+
+      .clk_sys (clk_sys_21_48),
+      .rx_valid(msu_rx_valid),
+      .rx_addr (msu_rx_addr),
+      .rx_data (msu_rx_data)
+  );
 
   wire [15:0] audio_l;
   wire [15:0] audio_r;
@@ -691,6 +858,12 @@ module core_top (
   reg mouse_enabled;
 
   reg use_square_pixels = 0;
+  // Set by generate.tcl
+  parameter PAL_PLL = 1'b0;
+  // MSU-1 debug overlay, off in release builds
+  parameter MSU_DEBUG = 1'b1;
+
+  reg msu_debug_squares = 0;
   reg blend_enabled = 0;
 
   // Settings sync
@@ -851,6 +1024,7 @@ module core_top (
       .rom_size(rom_size),
       .ram_size(ram_size),
       .PAL(PAL),
+      .pal_clock(PAL_PLL),
 
       // Save input/output
       .save_download(save_download_s),
@@ -911,7 +1085,47 @@ module core_top (
 
       // Audio
       .audio_l(audio_l),
-      .audio_r(audio_r)
+      .audio_r(audio_r),
+
+      // MSU-1
+      .msu_enable(msu_enable),
+      .msu_busy(msu_busy),
+      .msu_data_download(msu_data_download),
+      .msu_audio_download(msu_audio_download),
+
+      .msu_rx_valid(msu_rx_valid),
+      .msu_rx_addr(msu_rx_addr),
+      .msu_rx_data(msu_rx_data),
+
+      .msu_track_req_toggle(msu_track_req_toggle),
+      .msu_track_req_num(msu_track_req_num),
+      .msu_track_resp_toggle(msu_track_resp_toggle),
+      .msu_track_resp_size(msu_track_resp_size),
+      .msu_sector_req_toggle(msu_sector_req_toggle),
+      .msu_sector_req_num(msu_sector_req_num),
+
+      .msu_stream_mode(msu_stream_mode),
+      .msu_data_seek_req_toggle(msu_data_seek_req_toggle),
+      .msu_data_seek_addr(msu_data_seek_addr),
+      .msu_data_seek_resp_toggle(msu_data_seek_resp_toggle),
+      .msu_pos_req_toggle(msu_pos_req_toggle),
+      .msu_pos_ack_toggle(msu_pos_ack_toggle),
+      .msu_pos_value(msu_pos_value),
+      .msu_pos_seeking(msu_pos_seeking),
+      .msu_seek_slowest(msu_seek_slowest),
+
+      .msu_copy_req_toggle(msu_copy_req_toggle),
+      .msu_copy_region(msu_copy_region),
+      .msu_seek_region(msu_seek_region),
+      .msu_copy_base(msu_copy_base),
+      .msu_copy_len(msu_copy_len),
+      .msu_fill_done_toggle(msu_fill_done_toggle),
+      .msu_copy_done_toggle(msu_copy_done_toggle),
+      .msu_copy_audio(msu_copy_audio),
+      .msu_replay_req_toggle(msu_replay_req_toggle),
+      .msu_replay_slot(msu_replay_slot),
+      .msu_replay_len(msu_replay_len),
+      .msu_replay_done_toggle(msu_replay_done_toggle)
   );
 
   // Video
@@ -975,9 +1189,49 @@ module core_top (
       rgb <= {9'b0, ~latched_snap_index[0], use_square_pixels_s, 10'b0, 3'b0};
     end else if (de_out) begin
       de  <= 1;
-      rgb <= rgb_out;
+      rgb <= msu_debug_squares_s && msu_overlay_on ? msu_overlay_rgb : rgb_out;
     end
   end
+
+  // MSU-1 debug squares (setting 0x300): probe result and longest seek
+
+  wire [3:0] msu_probe_status_s;
+  wire msu_debug_squares_s;
+  wire msu_stream_underrun_s;
+  wire msu_stream_mode_s;
+  wire [5:0] msu_stream_fill_s;
+  wire [1:0] msu_seek_slowest_s;
+  synch_3 #(
+      .WIDTH(15)
+  ) msu_dbg_sync (
+      {msu_seek_slowest, msu_stream_fill, msu_stream_mode, msu_stream_underrun, msu_debug_squares, msu_probe_status},
+      {msu_seek_slowest_s, msu_stream_fill_s, msu_stream_mode_s, msu_stream_underrun_s, msu_debug_squares_s, msu_probe_status_s},
+      clk_video_5_37
+  );
+
+  wire msu_overlay_on;
+  wire [23:0] msu_overlay_rgb;
+
+  generate
+    if (MSU_DEBUG) begin : msu_debug
+      msu_overlay msu_overlay (
+          .clk(clk_video_5_37),
+          .de(de_out),
+          .vsync(video_vs),
+          .probe_status(msu_probe_status_s),
+              .stream_underrun(msu_stream_underrun_s),
+          .stream_mode(msu_stream_mode_s),
+          .stream_fill(msu_stream_fill_s),
+          .seek_slowest(msu_seek_slowest_s),
+          .on(msu_overlay_on),
+          .rgb(msu_overlay_rgb)
+      );
+    end else begin : msu_no_debug
+      assign msu_overlay_on = 0;
+      assign msu_overlay_rgb = 0;
+    end
+  endgenerate
+
 
   sound_i2s #(
       .CHANNEL_WIDTH(16),
@@ -1003,7 +1257,6 @@ module core_top (
 
   wire pll_core_locked;
 
-  parameter PAL_PLL = 1'b0;
 
   generate
     if (PAL_PLL) begin

@@ -1,5 +1,4 @@
 diff --git a/rtl/upstream/main.v b/rtl/upstream/main.v
-index dba1449..5b04939 100644
 --- a/rtl/upstream/main.v
 +++ b/rtl/upstream/main.v
 @@ -1,4 +1,15 @@
@@ -19,7 +18,15 @@ index dba1449..5b04939 100644
  	input             RESET_N,
  
  	input             MCLK,
-@@ -141,16 +152,6 @@ module main (
+@@ -124,6 +135,7 @@
+ 	output            MSU_DATA_SEEK,
+ 	output            MSU_DATA_REQ,
+ 	input             MSU_ENABLE,
++	input             MSU_STALL,
+ 
+ 	input             SS_SAVE,
+ 	input             SS_TOSD,
+@@ -144,16 +156,6 @@
  );
  
  parameter USE_DLH = 1'b1;
@@ -36,3 +43,12 @@ index dba1449..5b04939 100644
  
  wire [23:0] CA;
  wire        CPURD_N;
+@@ -184,7 +186,7 @@
+ 	.dspclk(ACLK),
+ 
+ 	.rst_n(RESET_N),
+-	.enable(1),
++	.enable(~MSU_STALL),
+ 
+ 	.ca(CA),
+ 	.cpurd_n(CPURD_N),

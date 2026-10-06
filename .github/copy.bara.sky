@@ -36,6 +36,7 @@ core.workflow(
           "upstream_patches/lightgun.patch",
           "upstream_patches/DSPn.patch",
           "upstream_patches/CX4.patch",
+          "upstream_patches/bram.patch",
         ]),
         metadata.add_header("[UPSTREAM] ", ignore_label_not_found=True, new_line=False),
     ],
