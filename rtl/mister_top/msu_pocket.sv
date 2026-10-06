@@ -206,12 +206,15 @@ module msu_sdram_store #(
   reg [2:0] pos_req_s = 0;
   reg stream_seek_wait = 0;
   reg last_was_read = 0;
-  // clk_sys is ~21.3MHz: 20ms (the game allows ~30ms per seek), 10ms, 30ms, and a 1.5s cap
-  localparam [25:0] STALL_AFTER = 26'd426_000;
-  localparam [25:0] SLOW_10MS = 26'd213_000;
-  localparam [25:0] SLOW_30MS = 26'd640_000;
-  localparam [25:0] STALL_MAX = 26'd32_000_000;
-  reg [25:0] seek_timer = 0;
+  // Timers count 2^11 clk_sys cycles (~96us at ~21.3MHz): 20ms (the game allows ~30ms per
+  // seek), 10ms, 30ms, and a 1.5s cap
+  localparam [14:0] STALL_AFTER = 15'd208;
+  localparam [14:0] SLOW_10MS = 15'd104;
+  localparam [14:0] SLOW_30MS = 15'd312;
+  localparam [14:0] STALL_MAX = 15'd15625;
+  reg [10:0] tick_div = 0;
+  wire tick = &tick_div;
+  reg [14:0] seek_timer = 0;
   // Sequential reads: freeze before the reader passes the buffered data (avail_end), once the
   // first streaming seek has set up a window. The word after the reader's must be in SDRAM
   // too, as the prefetch reads it; MSU.sv only moves rd_addr with rd_seek, which gates this
@@ -220,16 +223,17 @@ module msu_sdram_store #(
   reg seek_pending = 0;
   wire starving = stream_mode && stream_armed && !msu_data_download && !rd_seek && !seek_pending
       && !seek_active && !stream_seek_wait && rd_addr[29:0] + 30'd4 > avail_end;
-  reg [25:0] starve_timer = 0;
+  reg [14:0] starve_timer = 0;
   assign stall = stream_seek_wait && seek_timer >= STALL_AFTER && seek_timer < STALL_MAX
       || starving && starve_timer < STALL_MAX;
   always @(posedge clk_sys) begin
+    tick_div <= tick_div + 1'd1;
     if (!stream_mode) stream_armed <= 0;
     else if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) stream_armed <= 1;
     if (!starving) starve_timer <= 0;
-    else if (starve_timer != STALL_MAX) starve_timer <= starve_timer + 1'd1;
+    else if (tick && starve_timer != STALL_MAX) starve_timer <= starve_timer + 1'd1;
     if (!stream_seek_wait) seek_timer <= 0;
-    else if (seek_timer != STALL_MAX) seek_timer <= seek_timer + 1'd1;
+    else if (tick && seek_timer != STALL_MAX) seek_timer <= seek_timer + 1'd1;
     if (stream_seek_wait && seek_resp_s[2] == seek_req_toggle) begin
       if (seek_timer >= SLOW_30MS) seek_slowest <= 2'd3;
       else if (seek_timer >= SLOW_10MS && seek_slowest < 2'd2) seek_slowest <= 2'd2;

@@ -34,9 +34,22 @@ set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
 set_global_assignment -name SAFE_STATE_MACHINE ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT ON
-# MSU-1 logic only: mux restructuring saves area there; the rest of the core keeps it off
+# Mux restructuring saves area; it stays off for the SNES CPU/PPU/APU and on for the MSU-1
+# logic, the APF bridge glue, the light gun and the cartridge chip mappers
 set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|msu_apf:msu_apf"
 set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|msu_sdram_store:msu.msu_sdram_store"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|msu_audio:msu.msu_audio"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|msu_host:msu.msu_host"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|msu_bridge_rx:msu_bridge_rx"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|core_bridge_cmd:icb"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|data_loader:data_loader"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|data_loader:save_data_loader"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|main:main|CX4Map:CX4Map"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|main:main|DSP_LHRomMap:DSP_LHRomMap"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|main:main|SA1Map:SA1Map"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|main:main|GSUMap:GSUMap"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|data_unloader:data_unloader"
+set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|lightgun:lightgun"
 
 # ==============================================================================
 # Fitter Assignments
@@ -78,7 +91,7 @@ set_parameter -name PAL_PLL '0 -entity core_top
 
 
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
-set_global_assignment -name ALM_REGISTER_PACKING_EFFORT LOW
+set_global_assignment -name ALM_REGISTER_PACKING_EFFORT HIGH
 set_global_assignment -name NUM_PARALLEL_PROCESSORS 4
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 set_global_assignment -name SEARCH_PATH ../
