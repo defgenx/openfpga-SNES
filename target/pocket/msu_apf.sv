@@ -135,8 +135,6 @@ module msu_apf #(
   localparam S_FETCH_GO = 26;
   localparam S_SETTLE = 27;
   localparam S_AUD_ISSUE = 28;
-  localparam S_REPLAY = 29;
-  localparam S_REPLAY_WAIT = 30;
 
   reg [4:0] state = S_IDLE;
   reg [4:0] cmd_return;
@@ -219,7 +217,6 @@ module msu_apf #(
 
   localparam OP_PROBE = 0;
   localparam OP_TRACK = 1;
-  localparam OP_SECTOR = 2;  // replay of a .pcm sector from the audio ring
   localparam OP_DATA = 3;  // .msu chunk
   localparam OP_AUDIO = 4;  // .pcm chunk into the audio ring
   reg [2:0] op = OP_PROBE;
@@ -315,6 +312,12 @@ module msu_apf #(
   reg [AW-1:0] aud_start = 0, aud_end = 0, aud_fetch = 0;
   reg aud_bursting = 0;
   reg [1:0] pend_audio = 0;  // per bank: the chunk is audio
+  localparam RP_IDLE = 0;
+  localparam RP_LEAD = 1;
+  localparam RP_WAIT = 2;
+  localparam RP_TAIL = 3;
+  reg [1:0] rp_state = RP_IDLE;
+  reg [9:0] rp_drain = 0;
   assign replay_slot = sector_num[9:0];
   assign replay_len = sector_length;
 
@@ -476,6 +479,36 @@ module msu_apf #(
       done_bank <= ~done_bank;
     end
 
+    // Replays run beside the FSM, so a sector in the audio ring reaches msu_audio (4KB FIFO,
+    // ~23ms) even while an APF read is in flight. audio_download is up around the words, as for
+    // a hps_ext transfer
+    case (rp_state)
+      RP_IDLE: if (msu_enable && sector_pending && aud_hit) begin
+        sector_req_seen <= sector_req_s[2];
+        audio_download <= 1;
+        rp_drain <= 0;
+        rp_state <= RP_LEAD;
+      end
+      RP_LEAD: begin
+        rp_drain <= rp_drain + 1'd1;
+        if (rp_drain == 10'd31) begin
+          replay_req_toggle <= ~replay_req_toggle;
+          rp_state <= RP_WAIT;
+        end
+      end
+      RP_WAIT: if (replay_done_s[2] == replay_req_toggle) begin
+        rp_drain <= 0;
+        rp_state <= RP_TAIL;
+      end
+      default: begin  // RP_TAIL: let msu_audio take the last words before the download ends
+        rp_drain <= rp_drain + 1'd1;
+        if (&rp_drain) begin
+          audio_download <= 0;
+          rp_state <= RP_IDLE;
+        end
+      end
+    endcase
+
     case (state)
       S_IDLE: if (settled) begin
         if (probe_pending && &quiet && core_running) begin
@@ -494,14 +527,7 @@ module msu_apf #(
           digit <= 0;
           ndigits <= 0;
           state <= S_DIGITS;
-        end else if (msu_enable && sector_pending && aud_hit) begin
-          // In the audio ring: replay it, no SD access
-          sector_req_seen <= sector_req_s[2];
-          op <= OP_SECTOR;
-          audio_download <= 1;
-          drain <= 0;
-          state <= S_REPLAY;
-        end else if (msu_enable && sector_pending && !aud_near && !any_outstanding) begin
+        end else if (msu_enable && sector_pending && !aud_hit && !aud_near && !any_outstanding) begin
           // Outside the ring (track start, a loop point or resume beyond it): restart there
           aud_start <= aud_sector;
           aud_end <= aud_sector;
@@ -533,7 +559,7 @@ module msu_apf #(
           seek_waiting <= 0;
           data_seek_resp_toggle <= data_seek_seen;
           state <= S_SETTLE;
-        end else if (msu_enable && sector_pending && aud_near && aud_more && bank_free) begin
+        end else if (msu_enable && sector_pending && !aud_hit && aud_near && aud_more && bank_free) begin
           // msu_audio is waiting for a sector being read: keep reading the track
           state <= S_AUD_ISSUE;
         end else if (stream_mode && bank_free && more_to_fetch
@@ -567,20 +593,6 @@ module msu_apf #(
         if (aud_full) aud_start <= aud_fetch + 8 - AUD_KEEP;
         drain <= 0;
         state <= S_READ;
-      end
-
-      // Replay a sector from the audio ring; audio_download is up first, as for a read
-      S_REPLAY: begin
-        drain <= drain + 1'd1;
-        if (drain == 10'd31) begin
-          replay_req_toggle <= ~replay_req_toggle;
-          state <= S_REPLAY_WAIT;
-        end
-      end
-
-      S_REPLAY_WAIT: if (replay_done_s[2] == replay_req_toggle) begin
-        drain <= 0;
-        state <= S_DRAIN;
       end
 
       S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH_CHECK;
@@ -848,7 +860,6 @@ module msu_apf #(
         // The bridge receiver and the clk_sys write path empty well within this
         drain <= drain + 1'd1;
         if (&drain) begin
-          audio_download <= 0;
           if (op == OP_DATA && preloading && cmd_timed_out) begin
             // APF stopped answering during the boot copy: give up and let the game run
             preloading <= 0;

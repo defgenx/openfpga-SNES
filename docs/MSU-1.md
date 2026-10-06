@@ -136,7 +136,9 @@ streamed:
   audio, SNI word `0x400000` up), never read from APF on request. `msu_apf` keeps the current
   track's sectors `[aud_start, aud_end)` there, with `[aud_end, aud_fetch)` being read, and
   answers each `msu_audio` sector request with a replay (`replay_req_toggle`): the store reads
-  the sector from the ring into `msu_audio` in ~0.35ms. A request outside the ring (track
+  the sector from the ring into `msu_audio` in ~0.35ms. Replays have their own small FSM
+  (`rp_state`) beside the main one, so they are served while an APF read is in flight: an 8KB
+  read takes a few ms and one after a slot change tens of ms, longer than the ~23ms FIFO. A request outside the ring (track
   start, a loop point or resume already evicted) restarts it there. The track is read ahead
   in bursts of 8KB reads, from under `AUD_LOW` (176 sectors, ~1s) ahead of the last request up
   to `AUD_HIGH` (352, ~2s); during a burst `.msu` read-ahead waits unless a seek needs data. So
@@ -188,6 +190,11 @@ ring), which the controller assigns to port 1/SNI. ROM
 uses port 0 (banks 0–1). `msu_sdram_store` goes through the controller's SNI port, which only
 starts an access in an idle slot, so it never changes ROM timing. It keeps the current 16-bit
 word and prefetches the next, so DMA-speed reads from `$2001` do not stall.
+
+`psram.sv` (WRAM and ARAM) samples write data one `clk_mem` cycle after it sees `write_en`, with
+a matching multicycle path in `core_constraints.sdc`: sampling on the first cycle left up to
+~5ns of negative slack from the CPU and DMA data paths, so a write could store the previous
+value.
 
 `rfs1` is wired as upstream does it (`RFSH` in reset, the SNES `REFRESH` otherwise). It is the
 controller's only auto-refresh trigger. Without it, banks 2–3 are never refreshed, because

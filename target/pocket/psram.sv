@@ -246,6 +246,11 @@ module psram #(
       state <= state + 1;
     end
 
+    // Store data in for STATE_WRITE_DATA_START one cycle after write_en is seen: the write data
+    // can settle after write_en, and the writer holds it for its whole bus cycle. A multicycle
+    // path in core_constraints.sdc covers this register
+    if (state == WRITE_INITIAL_COUNT) latched_data_in <= data_in;
+
     if (state == STATE_NONE) begin
       // We are only busy when not in STATE_NONE
       busy <= 0;
@@ -278,8 +283,6 @@ module psram #(
           cram_a <= addr[21:16];
           cram_data <= addr[15:0];
           data_out_en <= 1;
-          // Store data in for future use
-          latched_data_in <= data_in;
 
           // Enable write
           cram_we_n <= 0;

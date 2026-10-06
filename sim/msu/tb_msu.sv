@@ -882,6 +882,7 @@ module tb_msu;
   task automatic video_pattern();
     integer f, addr;
     realtime t0;
+    underflows = 0;
     cpu_write(6, 8'hFF);
     cpu_write(4, 1);
     cpu_write(5, 0);
@@ -903,8 +904,12 @@ module tb_msu;
       while ($realtime - t0 < 16_667_000.0) @(posedge clk_sys);
     end
     cpu_write(7, 8'h00);
-    $display("[%0t] video: %0d frames of %0dKB at 60Hz (%0d KB/s), %0d freezes (%0.1f ms total), %0d slot switches, %0d samples",
-             $time, f, VIDEO_KB, VIDEO_KB * 60, stalls, stall_acc / 1e6, slot_switches, cap_count);
+    $display("[%0t] video: %0d frames of %0dKB at 60Hz (%0d KB/s), %0d freezes (%0.1f ms total), %0d slot switches, %0d samples, %0d audio underflows",
+             $time, f, VIDEO_KB, VIDEO_KB * 60, stalls, stall_acc / 1e6, slot_switches, cap_count, underflows);
+    if (underflows > 0) begin
+      $display("FAIL: the music stopped %0d times during the video", underflows);
+      errors = errors + 1;
+    end
   endtask
 
   // Header and chapter pointer at the file start, then per frame: the chapter's frame table,
@@ -912,6 +917,7 @@ module tb_msu;
   task automatic srb_pattern();
     integer f, chapter, frame;
     reg [7:0] st;
+    underflows = 0;
     cpu_write(6, 8'hFF);
     cpu_write(4, 1);
     cpu_write(5, 0);
@@ -937,8 +943,12 @@ module tb_msu;
       srb_read(frame + 5000, 256);
     end
     cpu_write(7, 8'h00);
-    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us of game time (budget %0d us), %0d freezes (%0.1f ms total, longest %0.1f us), %0d slot switches, %0d samples",
-             $time, seek_max / 1000.0, SEEK_BUDGET_US, stalls, stall_acc / 1e6, stall_max / 1000.0, slot_switches, cap_count);
+    $display("[%0t] SRB pattern: 92 seeks, longest %0.1f us of game time (budget %0d us), %0d freezes (%0.1f ms total, longest %0.1f us), %0d slot switches, %0d samples, %0d audio underflows",
+             $time, seek_max / 1000.0, SEEK_BUDGET_US, stalls, stall_acc / 1e6, stall_max / 1000.0, slot_switches, cap_count, underflows);
+    if (underflows > 0) begin
+      $display("FAIL: the music stopped %0d times during the pattern", underflows);
+      errors = errors + 1;
+    end
     if (seek_max > SEEK_BUDGET_US * 1000.0) begin
       $display("FAIL: a seek took longer than the game allows");
       errors = errors + 1;
