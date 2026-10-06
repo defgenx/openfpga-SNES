@@ -1,6 +1,4 @@
-// MSU-1 diagnostic overlay for debug builds, see docs/MSU-1.md for the colours. Square 1
-// (x 32-63) is the boot probe result, square 2 (x 72-103) the longest streaming seek or an underrun,
-// and while streaming a bar (y 72-79) shows how far the stream is ahead of the game.
+// MSU-1 debug overlay: probe result, longest streaming seek and the stream fill level
 module msu_overlay (
     input wire clk,
     input wire de,
@@ -56,8 +54,7 @@ module msu_overlay (
     endcase
   end
 
-  // Square 2: orange once the stream fell behind the game, else the longest streaming seek:
-  // gray none yet, green under 10ms, yellow under 30ms, red 30ms or more.
+  // Square 2: orange on underrun, else the longest seek (gray, green, yellow, red)
   wire [23:0] msu_handshake_rgb = stream_underrun ? 24'hFF8000
       : seek_slowest == 2'd0 ? 24'h404040 : seek_slowest == 2'd1 ? 24'h00FF00
       : seek_slowest == 2'd2 ? 24'hFFFF00 : 24'hFF0000;

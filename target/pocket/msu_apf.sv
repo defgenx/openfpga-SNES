@@ -1,36 +1,25 @@
-// MSU-1 file access over APF target commands: the Pocket stand-in for the MiSTer HPS
-// side of MSU-1 (Main_MiSTer support/snes/snes.cpp). See docs/MSU-1.md.
-//
-// All logic is in clk_74a. Requests from the SNES side (clk_sys) arrive as toggles
-// whose payload the sender holds stable until the matching response.
+// MSU-1 file access over APF target commands, in place of the MiSTer HPS side.
+// All logic is in clk_74a; clk_sys requests arrive as toggles.
 module msu_apf #(
     parameter [15:0] DATA_SLOT_ID = 16'd20,
     parameter [15:0] AUDIO_SLOT_ID = 16'd21,
     parameter [3:0] SCRATCH_REGION = 4'h3,
     parameter [31:0] DATA_BRIDGE_ADDR = 32'h4000_0000,
-    // SDRAM banks 2-3 hold 2^RING_BITS bytes of the .msu file. A file up to DATA_MAX_SIZE is
-    // copied whole at boot; a larger one is streamed through them as a ring (file byte X at
-    // X mod 2^RING_BITS), see docs/MSU-1.md "Streaming"
+    // .msu ring in SDRAM banks 2-3; a file over DATA_MAX_SIZE is streamed through it
     parameter RING_BITS = 23,
     parameter [31:0] DATA_MAX_SIZE = 32'h0080_0000,
-    // Games time a seek out (Super Road Blaster: "Timeout while seeking"), so a seek completes
-    // once STREAM_LEAD bytes past it are in, fetched as one read; chunks stay small so one
-    // already in flight delays a seek only briefly
-    parameter [31:0] STREAM_CHUNK = 32'h0000_2000,  // bytes per .msu read; at most the bounce buffer
+    parameter [31:0] STREAM_CHUNK = 32'h0000_2000,  // bytes per read, at most a bounce bank
     parameter [31:0] STREAM_LEAD = 32'h0000_1000,  // buffered past a seek before it completes
     parameter [31:0] STREAM_GUARD = 32'h0010_0000,  // ring space kept free behind the reader
-    // Read-ahead past the reader. Fetching only this far keeps SDRAM writes near the game's
-    // read rate, so they rarely compete with its reads
     parameter [31:0] STREAM_AHEAD = 32'h0004_0000,  // must stay below RING_SIZE/2 - STREAM_GUARD
-    // Quiet time after the last ROM/save load before probing (2^20 cycles ~ 14ms)
+    // Quiet time after the last ROM/save load before probing (~14ms)
     parameter QUIET_BITS = 20,
-    // Give up on an unanswered target command during the boot probe: Get/Open File after
-    // 2^29 cycles (~7s), the .msu copy (up to 8MB, several seconds) after 2^30 (~14s)
+    // Probe timeouts: 2^29 cycles for get/open, 2^30 for the boot copy
     parameter TIMEOUT_BITS = 30
 ) (
     input wire clk_74a,
 
-    // ROM/save load from the chip32 loader; the SNES is held in reset while this probes
+    // ROM/save load; the SNES is held in reset while probing
     input wire ioctl_download,
     // core_bridge_cmd reset_n: target commands are only serviced once the core runs
     input wire core_running,
@@ -53,7 +42,7 @@ module msu_apf #(
     output wire [31:0] target_dataslot_bridgeaddr,
     output wire [31:0] target_dataslot_length,
 
-    // Data slot size table (core_bridge_cmd port A); core_top yields it while dt_active
+    // Data slot size table (core_bridge_cmd port A)
     output reg dt_active = 0,
     output reg [9:0] dt_addr = 0,
     input wire [31:0] dt_q,
@@ -63,39 +52,34 @@ module msu_apf #(
     output reg msu_enable = 0,  // a <rom>.msu file exists
     output reg msu_data_download = 0,  // .msu bytes are streaming into SDRAM
     output reg audio_download = 0,  // a .pcm sector is streaming into msu_audio
-    // Boot probe result for the on-screen diagnostic, see docs/MSU-1.md
+    // Boot probe result for the debug overlay
     output reg [3:0] probe_status = 0,
 
-    // Track open: request toggle + number in, response toggle + file size out (0 = missing)
+    // Track open; track_size 0 = missing
     input wire track_req_toggle,
     input wire [15:0] track_num,
     output reg track_resp_toggle = 0,
     output reg [31:0] track_size = 0,
 
-    // Audio sector read: 1024 bytes at sector * 1024
+    // Audio sector requests
     input wire sector_req_toggle,
     input wire [21:0] sector_num,
 
-    // Streaming (.msu larger than DATA_MAX_SIZE): seek request toggle + offset in, response
-    // once STREAM_LEAD bytes past it are in SDRAM; the reader's position on request
+    // Streaming seek and reader position handshakes
     output reg stream_mode = 0,
-    output reg stream_underrun = 0,  // diagnostic: the game read past the buffered data
-    output reg [5:0] stream_fill = 0,  // diagnostic: buffered bytes past the reader, in STREAM_AHEAD/64
+    output reg stream_underrun = 0,  // debug: read past the buffered data
+    output reg [5:0] stream_fill = 0,  // debug: buffered past the reader, in STREAM_AHEAD/64
 
-    // Every .msu read lands in one of two banks of msu_sdram_store's bounce buffer, which
-    // copies each word to SDRAM as soon as it lands. Per bank: a request before the read
-    // (with copy_base/copy_len, latched by the store), fill done after it, and copy done once
-    // the chunk is in SDRAM; a bank is reused only after its copy is done
+    // Bounce buffer bank handshakes with msu_sdram_store: request, fill done, copy done
     output reg [1:0] copy_req_toggle = 0,
     output reg copy_audio = 0,  // the chunk is .pcm data for the audio ring
     output wire copy_region,  // streaming: SDRAM region of the window the chunk belongs to
     output wire seek_region,  // streaming: SDRAM region the reader is in after a seek
-    output wire [31:0] copy_base,  // the chunk's read_offset/read_length, stable for the read
+    output wire [31:0] copy_base,  // stable for the read
     output wire [13:0] copy_len,
     output reg [1:0] fill_done_toggle = 0,
     input wire [1:0] copy_done_toggle,
-    // Audio sectors are played from the SDRAM audio ring (msu_sdram_store replays them);
-    // the payload is stable until the done toggle
+    // Audio ring replay
     output reg replay_req_toggle = 0,
     output wire [9:0] replay_slot,
     output wire [10:0] replay_len,
@@ -106,7 +90,7 @@ module msu_apf #(
     output reg pos_req_toggle = 0,
     input wire pos_ack_toggle,
     input wire [31:0] pos_value,
-    input wire pos_seeking  // pos_value was taken while a seek was in flight: not the reader's
+    input wire pos_seeking  // pos_value taken mid-seek
 );
   localparam S_IDLE = 0;
   localparam S_GETFILE_DONE = 1;
@@ -143,15 +127,13 @@ module msu_apf #(
 
   ////////////////////////////////////////////////////////////////////////////
   // Scratch RAM for the get/open filename structs (path at 0x0, flags at 0x100).
-  // Single port: APF only touches it while a command is outstanding.
 
   reg [31:0] scratch[0:127];
   reg [6:0] fsm_addr = 0;
   reg [31:0] fsm_wdata;
   reg fsm_we = 0;
 
-  // APF samples read data well after bridge_rd, by when bridge_addr has moved on: latch the
-  // read address at the strobe so the word stays put, as data_unloader.sv does
+  // APF samples read data late: latch the address at the strobe, as data_unloader does
   reg [6:0] bridge_rd_addr = 0;
   reg prev_bridge_rd = 0;
   always @(posedge clk_74a) begin
@@ -172,8 +154,7 @@ module msu_apf #(
 
   wire [31:0] fsm_q = scratch_rd_data;
 
-  // Byte i of the path lives in word i>>2; the lane follows bridge endianness the
-  // same way data_loader.sv unpacks file bytes.
+  // Byte i of the path is in word i>>2, lane per bridge endianness
   reg [2:0] endian_s = 0;
   wire little = endian_s[2];
   // Byte order of the filename struct, taken from where its leading '/' lands
@@ -298,13 +279,9 @@ module msu_apf #(
 
   wire [15:0] opened_slot = op == OP_PROBE || op == OP_DATA ? DATA_SLOT_ID : AUDIO_SLOT_ID;
 
-  // Audio ring: SDRAM holds .pcm sectors [aud_start, aud_end) of the current track at slot
-  // sector mod 1024, with [aud_end, aud_fetch) being read and copied. APF caches file fragments
-  // for the last-accessed slot only, and finding a position in a large .msu again after a .pcm
-  // read costs tens of ms, so the track is read ahead in bursts: from under AUD_LOW sectors
-  // ahead of msu_audio's request up to AUD_HIGH, 8KB per read; .msu work waits meanwhile
-  // unless a seek needs data. See docs/MSU-1.md "Audio ring".
-  // Sector numbers are AW bits: tracks up to 256MB (~25 minutes)
+  // Audio ring: .pcm sectors [aud_start, aud_end) of the current track, slot = sector mod 1024,
+  // [aud_end, aud_fetch) in flight. Read ahead in bursts so slot 20/21 switches stay rare
+  // 18-bit sector numbers: tracks up to 256MB
   localparam AW = 18;
   localparam [AW-1:0] AUD_LOW = 176;  // ~1s of 44.1kHz stereo
   localparam [AW-1:0] AUD_HIGH = 352;
@@ -323,20 +300,15 @@ module msu_apf #(
 
   localparam [31:0] RING_SIZE = 32'd1 << RING_BITS;
 
-  // Streaming: two windows in their own halves of the SDRAM ring (regions). The active one
-  // holds file bytes [win_start, win_end) in SDRAM, with [win_end, fetch_end) read from APF
-  // and being copied, and is read ahead. The parked one keeps [park_start, park_end) from
-  // the last window the game left: Super Road Blaster alternates between a chapter's frame
-  // table and frame data every frame, so both stay buffered.
-  // .msu offsets are 30 bits: files up to 1GB, MiSTer's limit too. Windows are kept in 1KB
-  // pages (PW bits); data_pages rounds the file up, data_size_lo gives the last read's length
+  // Streaming: the active window [win_start, win_end) is read ahead, the parked one is kept
+  // for the game to come back to, each in its own half of the ring. Offsets in 1KB pages
   localparam OB = 30;
   localparam PW = OB - 10;
   localparam [31:0] REGION_PAGES = RING_SIZE >> 11;
   localparam [31:0] GUARD_PAGES = STREAM_GUARD >> 10;
   localparam [31:0] AHEAD_PAGES = STREAM_AHEAD >> 10;
   localparam [31:0] CHUNK_PAGES = STREAM_CHUNK >> 10;
-  // The window starts on the seek's page, so one more page keeps STREAM_LEAD past the seek
+  // One more page so STREAM_LEAD is past the seek itself
   localparam [31:0] LEAD_PAGES = (STREAM_LEAD >> 10) + 1;
   reg [PW-1:0] data_pages = 0;
   reg [13:0] data_size_lo = 0;
@@ -360,11 +332,11 @@ module msu_apf #(
   wire [PW-1:0] stream_base_c = seek_waiting ? seek_target : pos_value[OB-1:10];
   wire [PW-1:0] stream_left = data_pages - fetch_end;
   wire [PW-1:0] seek_addr = data_seek_addr[OB-1:10];
-  // Seeks get a short read so they complete quickly; read-ahead and the boot copy use chunks
+  // Seeks get a short read, read-ahead and the boot copy full chunks
   wire [3:0] chunk_limit = seek_waiting && !preloading ? LEAD_PAGES[3:0] : CHUNK_PAGES[3:0];
   wire last_chunk = stream_left <= chunk_limit;
   wire [3:0] chunk_pages_c = last_chunk ? stream_left[3:0] : chunk_limit;
-  // The last read stops at the file's end; it is under 16KB, so 14 bits of the difference do
+  // The last read stops at the file end (under 16KB, so 14 bits do)
   wire [13:0] chunk_length_c = last_chunk ? data_size_lo - {fetch_end[3:0], 10'b0} : {chunk_limit, 10'b0};
   assign copy_base = read_offset;
   assign copy_len = read_length;
@@ -374,9 +346,7 @@ module msu_apf #(
   wire seek_in_parked_c = seek_addr >= park_start && seek_addr < park_end
       && park_end - seek_addr < REGION_PAGES - GUARD_PAGES;
 
-  // The comparisons above are registered so they stay off the 74MHz FSM paths. The FSM acts
-  // on them only once state has held a cycle (settled), so they reflect its last writes; the
-  // concurrent win_end advance only grows win_end, which can delay seek_done by a cycle.
+  // Registered off the FSM paths; the FSM acts on them once settled
   reg [PW-1:0] stream_base = 0;
   reg [3:0] chunk_pages = 0;
   reg [13:0] chunk_length = 0;
@@ -385,9 +355,6 @@ module msu_apf #(
   reg [5:0] fill_c = 0;
   reg [4:0] prev_state = 0;
   wire settled = prev_state == state;
-  // APF caches file fragments for the last-accessed slot only, and re-finding a position in a
-  // large .msu after a .pcm read costs tens of ms. During an audio refill burst, .msu reads
-  // wait for the next sector request, up to 2^17 cycles (~1.8ms) after the last sector
   wire [AW-1:0] aud_sector = sector_num[AW-1:0];
   wire [AW-1:0] aud_last = track_size[AW+9:10] + (|track_size[9:0]);  // sectors in the track
   wire [AW-1:0] aud_left = aud_last - aud_fetch;
@@ -471,7 +438,7 @@ module msu_apf #(
     if (ioctl_download) quiet <= 0;
     else if (~&quiet) quiet <= quiet + 1'd1;
 
-    // A chunk reached SDRAM. The other win_end writers below require !any_outstanding
+    // A chunk reached SDRAM
     if (copy_outstanding[done_bank] && done_bank_copied) begin
       if (pend_audio[done_bank]) aud_end <= aud_end + (done_bank ? pend_pages1 : pend_pages0);
       else win_end <= win_end + (done_bank ? pend_pages1 : pend_pages0);
@@ -479,9 +446,7 @@ module msu_apf #(
       done_bank <= ~done_bank;
     end
 
-    // Replays run beside the FSM, so a sector in the audio ring reaches msu_audio (4KB FIFO,
-    // ~23ms) even while an APF read is in flight. audio_download is up around the words, as for
-    // a hps_ext transfer
+    // Replays run beside the main FSM so they never wait on an APF read
     case (rp_state)
       RP_IDLE: if (msu_enable && sector_pending && aud_hit) begin
         sector_req_seen <= sector_req_s[2];
@@ -500,7 +465,7 @@ module msu_apf #(
         rp_drain <= 0;
         rp_state <= RP_TAIL;
       end
-      default: begin  // RP_TAIL: let msu_audio take the last words before the download ends
+      default: begin  // RP_TAIL
         rp_drain <= rp_drain + 1'd1;
         if (&rp_drain) begin
           audio_download <= 0;
@@ -528,15 +493,13 @@ module msu_apf #(
           ndigits <= 0;
           state <= S_DIGITS;
         end else if (msu_enable && sector_pending && !aud_hit && !aud_near && !any_outstanding) begin
-          // Outside the ring (track start, a loop point or resume beyond it): restart there
+          // Outside the ring: restart it there
           aud_start <= aud_sector;
           aud_end <= aud_sector;
           aud_fetch <= aud_sector;
           state <= S_SETTLE;
         end else if (stream_mode && data_seek_pending && !(seek_restart && any_outstanding)) begin
-          // Inside the active window: keep it. Inside the parked one: swap them. Elsewhere:
-          // park the active window and start a new one at the seek, in the other region.
-          // Switching waits for the chunks being copied, which belong to the active window.
+          // Keep the active window, swap with the parked one, or start a new one
           data_seek_seen <= data_seek_s[2];
           seek_target <= seek_addr;
           seek_waiting <= 1;
@@ -560,11 +523,11 @@ module msu_apf #(
           data_seek_resp_toggle <= data_seek_seen;
           state <= S_SETTLE;
         end else if (msu_enable && sector_pending && !aud_hit && aud_near && aud_more && bank_free) begin
-          // msu_audio is waiting for a sector being read: keep reading the track
+          // msu_audio waits on a sector being read
           state <= S_AUD_ISSUE;
         end else if (stream_mode && bank_free && more_to_fetch
             && (seek_waiting || !(aud_bursting && aud_more))) begin
-          // Ask where the reader is, then decide whether to fetch the next chunk
+          // Ask where the reader is
           pos_req_toggle <= ~pos_req_toggle;
           state <= S_POS_WAIT;
         end else if (msu_enable && aud_bursting && aud_more && bank_free) begin
@@ -579,7 +542,7 @@ module msu_apf #(
 
       S_SETTLE: state <= S_IDLE;
 
-      // Read the next .pcm chunk at aud_fetch into bank cur_bank, for the audio ring
+      // Next .pcm chunk into the audio ring
       S_AUD_ISSUE: begin
         op <= OP_AUDIO;
         read_page <= 22'(aud_fetch);
@@ -597,8 +560,7 @@ module msu_apf #(
 
       S_POS_WAIT: if (pos_ack_s[2] == pos_req_toggle) state <= S_FETCH_CHECK;
 
-      // A position taken during a seek says nothing about the active window; the seek itself
-      // is handled from S_IDLE
+      // A position taken mid-seek says nothing about the window
       S_FETCH_CHECK: state <= pos_seeking && !seek_waiting ? S_IDLE : S_FETCH_GO;
 
       S_FETCH_GO: begin
@@ -606,8 +568,7 @@ module msu_apf #(
         stream_fill <= fill_c;
         if (behind_win && !seek_waiting) stream_underrun <= 1;
         if (past_fetch) begin
-          // The reader got past everything fetched: refill from where it is, once the chunk
-          // being copied is in
+          // The reader got past the fetched data: restart there
           if (!any_outstanding) begin
             win_start <= stream_base;
             win_end <= stream_base;
@@ -808,7 +769,6 @@ module msu_apf #(
         end else begin
           track_size <= cmd_ok ? slot_size : 32'd0;
           track_resp_toggle <= ~track_resp_toggle;
-          // A new track: nothing of it is in the audio ring yet (no chunk is outstanding)
           aud_start <= 0;
           aud_end <= 0;
           aud_fetch <= 0;
@@ -830,10 +790,10 @@ module msu_apf #(
         end
       end
 
-      // Boot copy of a small .msu: chunk by chunk through the bounce buffer
+      // Boot copy of a small .msu
       S_PRELOAD: begin
         if (!settled) begin
-          // chunk_* and more_to_fetch catch up with S_DRAIN's fetch_end
+          // Wait for chunk_* to catch up with fetch_end
         end else if (!more_to_fetch) begin
           if (!any_outstanding) begin
             preloading <= 0;
@@ -916,9 +876,8 @@ module msu_apf #(
 
 endmodule
 
-// Bridge writes to region 0x4 (.msu and .pcm chunks for the bounce buffer) handed to clk_sys one 32-bit word
-// at a time. APF writes at most every ~75 clk_74a cycles, so a toggle handshake replaces
-// data_loader's dual-clock FIFO; the word and address are held until the next write.
+// Region 0x4 bridge writes, handed to clk_sys one word at a time (APF writes ~75 cycles
+// apart, so a toggle is enough)
 module msu_bridge_rx #(
     parameter [3:0] REGION = 4'h4
 ) (

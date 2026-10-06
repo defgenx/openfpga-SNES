@@ -647,7 +647,7 @@ module core_top (
   end
 
   ////////////////////////////  MSU-1  ////////////////////////////////////
-  // See docs/MSU-1.md. Bridge regions: 0x3 filename structs, 0x4 the bounce buffer
+  // Bridge regions: 0x3 filename structs, 0x4 the bounce buffer
 
   wire target_dataslot_done;
   wire [2:0] target_dataslot_err;
@@ -767,7 +767,6 @@ module core_top (
       .replay_done_toggle(msu_replay_done_toggle)
   );
 
-  // Region 0x4 words: .msu and .pcm chunks for the bounce buffer at 0x4000_0000 + {bank, offset}
   wire msu_rx_valid;
   wire [13:0] msu_rx_addr;
   wire [31:0] msu_rx_data;
@@ -859,9 +858,9 @@ module core_top (
   reg mouse_enabled;
 
   reg use_square_pixels = 0;
-  // PAL clock bitstream (set by generate.tcl); declared before its first use below
+  // Set by generate.tcl
   parameter PAL_PLL = 1'b0;
-  // MSU-1 debug overlay; generate.tcl's "release" option builds without it
+  // MSU-1 debug overlay, off in release builds
   parameter MSU_DEBUG = 1'b1;
 
   reg msu_debug_squares = 0;
@@ -1194,9 +1193,7 @@ module core_top (
     end
   end
 
-  // MSU-1 diagnostic, colours in docs/MSU-1.md. Two 32x32 squares, drawn while the
-  // "MSU-1 Debug Squares" setting (0x300) is on:
-  // x 32-63 the probe result, x 72-103 the APF target command handshake.
+  // MSU-1 debug squares (setting 0x300): probe result and longest seek
 
   wire [3:0] msu_probe_status_s;
   wire msu_debug_squares_s;

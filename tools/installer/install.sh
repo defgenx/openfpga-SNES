@@ -195,7 +195,6 @@ for rev in snes_pal.rev snes_spc.rev; do
 	fi
 done
 
-[ -f "$SRC/MSU1-INSTALL.md" ] && install_file "$SRC/MSU1-INSTALL.md" "MSU1-INSTALL.md"
 # ROMs and MSU-1 packs go here, shared with agg23.SNES
 [ $DRY_RUN -eq 1 ] || mkdir -p "$SD/Assets/snes/common"
 

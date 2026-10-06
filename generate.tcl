@@ -6,9 +6,7 @@ package require ::quartus::project
 # Required for compilation
 package require ::quartus::flow
 
-# Options after the variant, in any order:
-#   release  build without the MSU-1 debug overlay
-#   fast     skip the timing analyzer; the bitstream is written before it runs
+# Options after the variant: release (no MSU-1 debug overlay), fast (no timing analysis)
 if { $argc < 1 } {
   puts "Usage: generate.tcl <variant> \[release\] \[fast\]"
   exit
@@ -92,8 +90,7 @@ if { [lindex $argv 0] == "ntsc" } {
 
 if { [lsearch -exact $options "fast"] >= 0 } {
   puts "Fast build: no timing analysis"
-  # execute_module skips the project's PRE_FLOW_SCRIPT_FILE, which writes build_id.mif;
-  # project_open has already made projects/ the working directory
+  # execute_module skips the PRE_FLOW_SCRIPT_FILE that writes build_id.mif
   source ../platform/pocket/build_id_gen.tcl
   execute_module -tool map
   execute_module -tool fit

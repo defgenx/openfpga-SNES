@@ -1,8 +1,6 @@
-// clk_sys half of MSU-1 on the Pocket. See docs/MSU-1.md.
+// clk_sys half of MSU-1 on the Pocket.
 //
-// msu_host replaces upstream hps_ext.v: same mounting/missing/ack behaviour, but the
-// requests go to target/pocket/msu_apf.sv (clk_74a) as toggles instead of to the HPS. Sector
-// data reaches msu_audio from msu_sdram_store's audio ring replay.
+// msu_host replaces upstream hps_ext.v; requests go to msu_apf (clk_74a) as toggles.
 module msu_host (
     input wire clk_sys,
     input wire reset,
@@ -75,14 +73,11 @@ module msu_host (
   end
 endmodule
 
-// The .msu data file in SDRAM banks 2-3 (8MB ring, then the 1MB audio ring), reached through the controller's SNI
-// port, which waits for idle slots and so never disturbs ROM timing on port 0.
-// Replaces upstream msu_data_store.sv (DDR3) for the MSU.sv data interface. msu_apf reads the
-// file a chunk at a time into one of two block RAM bounce buffer banks; this copies each word
-// into SDRAM as soon as it lands, between the game's reads. While streaming, the SDRAM banks
-// are a ring around the reader. See docs/MSU-1.md.
+// The .msu file and the current .pcm track in SDRAM banks 2-3, through the SNI port.
+// Replaces upstream msu_data_store.sv. msu_apf reads chunks into two bounce buffer banks
+// and each word is copied to SDRAM as it lands.
 module msu_sdram_store #(
-    parameter RING_BITS = 23,  // .msu ring; the 1MB audio ring sits above it (AUD_WORD_BASE)
+    parameter RING_BITS = 23,  // .msu ring, the audio ring sits above it
     parameter CHUNK_WORD_BITS = 11  // two bounce buffer banks of 2^n 32-bit words (8KB each)
 ) (
     input wire clk_sys,
@@ -96,9 +91,8 @@ module msu_sdram_store #(
     output reg pos_ack_toggle = 0,
     output reg [31:0] pos_value = 0,
     output reg pos_seeking = 0,  // pos_value was taken while a seek was in flight
-    // A streaming seek slower than STALL_AFTER freezes the SNES until it completes (or until
-    // STALL_MAX), so the game cannot time it out. seek_slowest: longest seek so far, for the
-    // debug overlay: 0 none, 1 under 10ms, 2 under 30ms, 3 longer
+    // Freeze the SNES while a streaming seek or the stream runs late; seek_slowest is for
+    // the debug overlay (0 none, 1 under 10ms, 2 under 30ms, 3 longer)
     output wire stall,
     output reg [1:0] seek_slowest = 0,
 
@@ -107,19 +101,17 @@ module msu_sdram_store #(
     input wire load_valid,
     input wire [CHUNK_WORD_BITS+2:0] load_addr,
     input wire [31:0] load_data,
-    // Per bank: a request (latching copy_base/copy_len) before its chunk arrives, fill done
-    // once it has all arrived, and copy done once it is all in SDRAM
+    // Per bank: request (latches copy_*), fill done, copy done
     input wire [1:0] copy_req_toggle,
     input wire copy_region,  // streaming: ring region the requested chunk goes to
-    input wire copy_audio,  // the chunk is .pcm data for the audio ring (copy_base: byte in file)
-    input wire seek_region,  // streaming: ring region of the reader, valid with the seek response
+    input wire copy_audio,  // .pcm chunk for the audio ring
+    input wire seek_region,  // streaming: reader region, valid with the seek response
     input wire [31:0] copy_base,
     input wire [CHUNK_WORD_BITS+2:0] copy_len,
     input wire [1:0] fill_done_toggle,
     output reg [1:0] copy_done_toggle = 0,
 
-    // Audio ring replay: one .pcm sector (replay_len bytes from ring slot replay_slot) as
-    // msu_audio's 16-bit writes; the request payload is stable until the done toggle
+    // Audio ring replay: one sector into msu_audio, payload stable until done
     input wire replay_req_toggle,
     input wire [9:0] replay_slot,
     input wire [10:0] replay_len,
@@ -141,8 +133,7 @@ module msu_sdram_store #(
     output reg sni_rd_req = 0,
     input wire sni_ready
 );
-  // Word addresses wrap at the ring size
-  // Streaming splits the ring into two regions, one per msu_apf window
+  // Word addresses wrap at the ring size; streaming splits it in two regions
   localparam [22:0] WORD_MASK = (23'd1 << (RING_BITS - 1)) - 1'd1;
   localparam [22:0] REGION_WORD_MASK = WORD_MASK >> 1;
   function automatic [22:0] wrap_in(input region, input [22:0] w);
@@ -157,8 +148,7 @@ module msu_sdram_store #(
     wrap = wrap_in(read_region, w);
   endfunction
 
-  // Bounce buffer: APF fills a bank at bridge speed, the copy drains it at SNI speed. A bank
-  // is refilled only after its copy is done, so nothing is ever dropped.
+  // Bounce buffer; a bank is refilled only once its copy is done
   reg [31:0] cbuf[0:(2<<CHUNK_WORD_BITS)-1];
   reg [31:0] cbuf_q = 0;
 
@@ -175,8 +165,7 @@ module msu_sdram_store #(
   reg [1:0] pending = 0;
   reg [1:0] filled = 0;
   reg [23:0] base0 = 0, base1 = 0;  // the ring only uses the low 24 bits of the file offset
-  // Streaming: file offset where each region's buffered data ends, from the chunks copied
-  // into it; the reader is frozen before it gets there (see stall)
+  // End of the data copied into each region; the reader is frozen there
   reg [29:0] fbase0 = 0, fbase1 = 0, copy_cur_fbase = 0;
   reg [29:0] avail_end0 = 0, avail_end1 = 0;
   wire [29:0] avail_end = read_region ? avail_end1 : avail_end0;
@@ -206,8 +195,7 @@ module msu_sdram_store #(
   reg [2:0] pos_req_s = 0;
   reg stream_seek_wait = 0;
   reg last_was_read = 0;
-  // Timers count 2^11 clk_sys cycles (~96us at ~21.3MHz): 20ms (the game allows ~30ms per
-  // seek), 10ms, 30ms, and a 1.5s cap
+  // Timers count 2^11 clk_sys cycles (~96us)
   localparam [14:0] STALL_AFTER = 15'd208;
   localparam [14:0] SLOW_10MS = 15'd104;
   localparam [14:0] SLOW_30MS = 15'd312;
@@ -215,9 +203,7 @@ module msu_sdram_store #(
   reg [10:0] tick_div = 0;
   wire tick = &tick_div;
   reg [14:0] seek_timer = 0;
-  // Sequential reads: freeze before the reader passes the buffered data (avail_end), once the
-  // first streaming seek has set up a window. The word after the reader's must be in SDRAM
-  // too, as the prefetch reads it; MSU.sv only moves rd_addr with rd_seek, which gates this
+  // Freeze before sequential reads pass avail_end, once the first seek set up a window
   reg stream_armed = 0;
   reg seek_active = 0;
   reg seek_pending = 0;
@@ -244,8 +230,7 @@ module msu_sdram_store #(
     seek_resp_s <= {seek_resp_s[1:0], seek_resp_toggle};
     pos_req_s <= {pos_req_s[1:0], pos_req_toggle};
     if (pos_req_s[2] != pos_ack_toggle) begin
-      // MSU.sv moves rd_addr as soon as the game writes a seek, before msu_apf hears of it,
-      // so flag positions taken during a seek
+      // MSU.sv moves rd_addr as soon as the game writes a seek
       pos_value <= rd_addr;
       pos_seeking <= rd_seek || seek_pending || seek_active;
       pos_ack_toggle <= pos_req_s[2];
@@ -373,7 +358,7 @@ module msu_sdram_store #(
     case (st)
       ST_IDLE: begin
         if (prefetch_go) begin
-          // First, as the game reads without waiting; the copy has no deadline
+          // First, as the game reads without waiting
           cur_word <= wrap(cur_word + 1'd1);
           cur_q <= next_q;
           next_valid <= 0;
@@ -395,7 +380,7 @@ module msu_sdram_store #(
           wait_cnt <= 0;
           st <= ST_WAIT;
         end else if (!msu_data_download && seek_pending && stream_mode && !stream_seek_wait) begin
-          // Streaming: have msu_apf buffer from here first (copies keep flowing meanwhile)
+          // Streaming: have msu_apf buffer from here first
           seek_pending <= 0;
           seek_active <= 1;
           rd_seek_done <= 0;
@@ -426,7 +411,6 @@ module msu_sdram_store #(
           wait_cnt <= 0;
           st <= ST_WAIT;
         end else if (replaying && rp_left != 0) begin
-          // Audio ring to msu_audio: ~0.35ms a sector, well ahead of its FIFO
           sni_addr <= {1'b1, replay_sni_word, 1'b0};
           sni_rd_req <= 1;
           dst <= DST_REPLAY;
@@ -436,8 +420,7 @@ module msu_sdram_store #(
       end
 
       ST_WAIT: begin
-        // sni_ready drops one clk_mem cycle after the request and an access takes several,
-        // so it is low by the next clk_sys edge; skip that one stale cycle
+        // sni_ready drops a clk_mem cycle after the request: skip one stale cycle
         if (wait_cnt != 2'd1) wait_cnt <= wait_cnt + 1'd1;
         else if (sni_ready) begin
           last_was_read <= sni_rd_req;

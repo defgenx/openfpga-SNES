@@ -1,46 +1,12 @@
 # SNES MSU-1 test core for the Analogue Pocket
 
-This installs a second SNES core, `defgenx.SNESMSU`, next to the regular `agg23.SNES` core.
-The regular core is not modified: pick either one from the SNES entry in Cores on the Pocket.
+Installs `defgenx.SNESMSU` next to the regular `agg23.SNES` core, which is left untouched.
 
-> **Experimental**: MSU-1 on the Pocket has not been tested on hardware yet.
+1. Unzip this archive and insert the Pocket's SD card.
+2. Run `install.bat` on Windows, `install-linux.desktop` or `./install.sh` on Linux, `./install.sh` on macOS.
 
-## Install
+The installer finds the card and asks before replacing any file that differs.
 
-1. Unzip this archive anywhere on your computer and insert the Pocket's SD card.
-2. Run the installer:
-   - **Windows**: double-click `install.bat`.
-   - **Linux**: double-click `install-linux.desktop` (on GNOME, right-click it and choose
-     *Allow Launching* the first time), or run `./install.sh` in a terminal.
-   - **macOS**: run `./install.sh` in a terminal.
-3. The installer finds the card, asks before installing, copies the core, and offers to eject.
+Put the MSU-1 pack next to the ROM, with the same base name (`game.sfc`, `game.msu`, `game-1.pcm`, ...).
 
-Files that already exist on the card and differ are never replaced without asking.
-
-## MSU-1 packs
-
-Put the pack next to the ROM, with the same base name:
-
-```
-/Assets/snes/common/Zelda MSU/zelda.sfc
-/Assets/snes/common/Zelda MSU/zelda.msu      (required, may be empty)
-/Assets/snes/common/Zelda MSU/zelda-1.pcm
-/Assets/snes/common/Zelda MSU/zelda-2.pcm
-...
-```
-
-A `.msu` data file up to 8MB is copied to memory at boot (a short black screen for large
-ones); a larger one, such as an FMV game's video, is streamed from the SD card while the game
-plays. Both cores share ROMs and saves.
-
-## Troubleshooting
-
-Turn on **MSU-1 Debug Squares** in the core's settings to draw two small squares near the
-top-left corner of the picture. The left one
-shows MSU-1 detection: green = found, red = `<rom>.msu` not found (check the names), light gray
-= still loading. The README's "Troubleshooting MSU-1" section lists every colour:
-https://github.com/defgenx/openfpga-SNES/tree/feature/msu1#troubleshooting-msu-1
-
-## Remove
-
-Delete the `Cores/defgenx.SNESMSU` folder from the SD card.
+To remove it, delete `Cores/defgenx.SNESMSU` from the card.

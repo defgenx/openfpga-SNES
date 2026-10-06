@@ -34,8 +34,7 @@ set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
 set_global_assignment -name PRE_MAPPING_RESYNTHESIS ON
 set_global_assignment -name SAFE_STATE_MACHINE ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT ON
-# Mux restructuring saves area; it stays off for the SNES CPU/PPU/APU and on for the MSU-1
-# logic, the APF bridge glue, the light gun and the cartridge chip mappers
+# Area: mux restructuring, except for the CPU/PPU/APU
 set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|msu_apf:msu_apf"
 set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|msu_sdram_store:msu.msu_sdram_store"
 set_instance_assignment -name MUX_RESTRUCTURE ON -to "core_top:ic|MAIN_SNES:snes|msu_audio:msu.msu_audio"

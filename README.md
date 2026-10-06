@@ -48,59 +48,22 @@ The Super Game Boy, ST011 (Hayazashi Nidan Morita Shougi), and ST018 (Hayazashi 
 
 #### MSU-1
 
-> **Warning**: Experimental, being tested on hardware
+> **Warning**: Experimental
 
-The homebrew MSU-1 chip (CD-quality audio tracks and a streamed data file) is supported in all bitstreams, using the MiSTer naming scheme. Put the pack next to the ROM, with the same base name:
+MSU-1 (CD-quality audio tracks and a data file) is supported in all bitstreams, with the MiSTer naming scheme. Put the pack next to the ROM, with the same base name:
 
 ```
 /Assets/snes/common/Zelda MSU/zelda.sfc
 /Assets/snes/common/Zelda MSU/zelda.msu      (required, may be empty)
 /Assets/snes/common/Zelda MSU/zelda-1.pcm
 /Assets/snes/common/Zelda MSU/zelda-2.pcm
-...
 ```
 
-To try it without touching the regular core, install the test build as a separate core, `defgenx.SNESMSU`. Unzip `defgenx.SNESMSU.zip` from the [releases](https://github.com/defgenx/openfpga-SNES/releases), then run `install.bat` on Windows, `install-linux.desktop` on Linux, or `./install.sh` in a terminal. Run from a clone instead (`tools/installer/`), the installers download the most recently published release; `--tag <tag>` (`-Tag` in PowerShell) picks another. To package one from a bitstream, use `tools/package-msu.sh`.
+A `.msu` up to 8MB is copied to memory at boot; a larger one (FMV games) is streamed from the SD card, and the game is briefly frozen when the card falls behind. CPU turbo is off while MSU-1 is enabled.
 
-MSU-1 is enabled when `<rom>.msu` exists. A data file up to 8MB is copied to memory at boot (expect a short black screen for large ones). A larger one, such as an FMV game's video, is streamed from the SD card while the game plays. See [docs/MSU-1.md](docs/MSU-1.md) for how it works.
+The test builds install as a separate core, `defgenx.SNESMSU`, next to the regular one: unzip `defgenx.SNESMSU.zip` from the [releases](https://github.com/defgenx/openfpga-SNES/releases) and run `install.bat` (Windows) or `./install.sh`. `tools/build-windows.bat` builds and installs it with a local Quartus 21.1.
 
-##### Troubleshooting MSU-1
-
-Turn on **MSU-1 Debug Squares** in the core's settings menu to draw two small squares near the top-left corner of the picture. They are off by default, and stay on while the setting is on. While a large `.msu` streams, a bar under them shows how far the stream is ahead of the game: full is 256KB buffered, empty means the game is reading data as soon as it arrives. Release builds (`generate.tcl <variant> release`, `tools/package-msu.sh --release`, `tools/build-windows.ps1 -Release`) leave the squares out to save FPGA space.
-
-**Left square: MSU-1 detection at boot**
-
-| Color | What happened | What to do |
-|---|---|---|
-| Dark gray | Detection has not run yet | Wait; if it stays, report it |
-| Light gray | Detection in progress; a large `.msu` file is being copied (a few seconds) | Wait |
-| Green | MSU-1 found and enabled | If the game still plays its original music, the ROM is not the MSU-1 patched one, or the `.pcm` names do not match the ROM's |
-| Red | `<rom>.msu` not found | Put `game.msu` next to `game.sfc`, with exactly the same base name. ROMs without a pack always show red |
-| Yellow | The Pocket rejected the path as malformed | Report it, with the ROM's full path |
-| Orange | The Pocket says the MSU-1 data slot is undefined | Reinstall the core (`data.json` is out of date) |
-| Cyan | The Pocket hit a general error opening the `.msu` | Check the SD card; report it |
-| Pink | The Pocket returned another error code | Report it |
-| Blue | The Pocket did not return the ROM's path | Report it |
-| White | The ROM path is unreadable or too long | Shorten the folder or file name |
-| Magenta | The Pocket did not answer within ~7s | Report it |
-
-**Right square: streaming**
-
-| Color | What happened |
-|---|---|
-| Gray | No streaming seek yet |
-| Green | Longest seek so far under 10ms |
-| Yellow | Longest seek 10-30ms: the core froze the game briefly to hide it |
-| Red | A seek took 30ms or more: the core froze the game until the SD card caught up |
-| Orange | The game read past the streamed data: the SD card did not keep up (stays orange until the next boot) |
-
-CPU turbo is switched off automatically while MSU-1 is enabled, because MSU-1 games do not run reliably with it.
-
-FMV games such as Super Road Blaster stream their video from the `.msu` file. If the game reports bad video frames (e.g. `video-frame FE01 of chapter B479 is bad`), the stream did not keep up with it. With the debug squares on, an orange right-hand square means the stream fell behind the game; please report it.
-
-##### Building the MSU-1 core on Windows
-
-Install [Quartus Prime Lite 21.1](https://www.intel.com/content/www/us/en/software-kit/684215/intel-quartus-prime-lite-edition-design-software-version-21-1-for-windows.html) with Cyclone V support, clone this branch, then double-click `tools\build-windows.bat`. It compiles the NTSC, PAL and SPC7110/S-DD1/BSX bitstreams, writes `release\defgenx.SNESMSU.zip`, and runs the installer. From PowerShell, `tools\build-windows.ps1 -Variants ntsc` builds one bitstream only, and `-PackageOnly` repackages the last build.
+Debug builds have a **MSU-1 Debug Squares** setting. The left square is the boot detection: green found, red `<rom>.msu` not found (check the names), gray in progress, any other colour an APF error. The right square is the longest streaming seek: green under 10ms, yellow under 30ms, red longer, orange if the stream fell behind the game.
 
 #### BSX
 

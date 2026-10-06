@@ -23,8 +23,7 @@ set_multicycle_path -from {ic|snes|sdram|*} -to [get_clocks {ic|mp1|mf_pllbase*_
 set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase*_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|sdram|*} -setup 2
 set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase*_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|sdram|*} -hold 1
 
-# psram samples write data one clk_mem cycle after it sees write_en (psram.sv); the trailing
-# wildcard also matches the register once the fitter retimes it (latched_data_in[5]_OTERM...)
+# psram latches write data a cycle after write_en; the * also matches the retimed register
 set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase*_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|wram|latched_data_in* ic|snes|aram|latched_data_in*} -end -setup 2
 set_multicycle_path -from [get_clocks {ic|mp1|mf_pllbase*_inst|altera_pll_i|*[1].*|divclk}] -to {ic|snes|wram|latched_data_in* ic|snes|aram|latched_data_in*} -end -hold 1
 

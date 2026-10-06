@@ -84,7 +84,7 @@ module MAIN_SNES (
     input wire [3:0] rom_size,
     input wire [3:0] ram_size,
     input wire PAL,
-    input wire pal_clock,  // clk_sys is the PAL frequency (21.28MHz); PAL can be overridden
+    input wire pal_clock,  // clk_sys is the PAL frequency (21.28MHz)
 
     // Saves
     input wire save_download,
@@ -148,14 +148,13 @@ module MAIN_SNES (
     output wire [15:0] audio_l,
     output wire [15:0] audio_r,
 
-    // MSU-1, see docs/MSU-1.md. Levels come from clk_74a (msu_apf) and are synchronized
-    // here; the received words come from msu_bridge_rx and are already in clk_sys.
+    // MSU-1. Levels from msu_apf (clk_74a) are synchronized here
     input wire msu_enable,
     input wire msu_busy,
     input wire msu_data_download,
     input wire msu_audio_download,
 
-    // Bridge words for the bounce buffer: {bank, byte offset in the chunk}
+    // Bounce buffer words from msu_bridge_rx, already in clk_sys
     input wire msu_rx_valid,
     input wire [13:0] msu_rx_addr,
     input wire [31:0] msu_rx_data,
@@ -176,7 +175,7 @@ module MAIN_SNES (
     output wire msu_pos_ack_toggle,
     output wire [31:0] msu_pos_value,
     output wire msu_pos_seeking,
-    output wire [1:0] msu_seek_slowest,  // debug overlay, see msu_sdram_store
+    output wire [1:0] msu_seek_slowest,
 
     // .msu chunk copy from the bounce buffer to SDRAM (msu_apf)
     input wire [1:0] msu_copy_req_toggle,
@@ -363,11 +362,10 @@ module MAIN_SNES (
   wire [7:0] G;
   wire [7:0] B;
 
-  // Audio ring replay into msu_audio (msu_sdram_store)
   wire msu_replay_wr;
   wire [15:0] msu_replay_data;
 
-  // Freezes the console while a slow MSU-1 streaming seek completes
+  // Freezes the console while MSU-1 streaming runs late
   wire msu_stall;
 
   main #(
@@ -611,15 +609,13 @@ module MAIN_SNES (
       .wr0  (cart_download ? ioctl_wr : ~ROM_WE_N),
       .word0(cart_download | ROM_WORD),
 
-      // Port 1 — unused. rfs1 is the controller's only auto-refresh trigger; wired as
-      // upstream so banks 2-3 (MSU data, never touched by ROM reads) keep their contents.
+      // Port 1 unused; rfs1 refreshes banks 2-3 (MSU-1 data)
       .addr1(24'b0),
       .din1(16'b0),
       .dout1(),
       .wr1(1'b0),
       .rd1(1'b0),
-      // The CPU's refresh request stops while an MSU-1 seek freezes the console: refresh
-      // from RFSH then, as in reset, or a freeze over ~64ms loses SDRAM contents
+      // The CPU stops requesting refresh while frozen
       .rfs1(cart_download ? 1'b0 : !RESET_N || msu_stall ? RFSH : snes_refresh),
       .word1(1'b0),
 

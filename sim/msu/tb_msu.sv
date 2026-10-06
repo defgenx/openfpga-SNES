@@ -14,7 +14,7 @@ module tb_msu;
   parameter STREAM = 0;
   // Super Road Blaster's access pattern with the hardware's chunk and lead sizes, music
   // playing at its real rate, and APF costs: a fixed latency per read plus a penalty when the
-  // slot changes (APF drops its cluster-chain cache then; see docs/MSU-1.md)
+  // slot changes (APF drops its cluster-chain cache then)
   parameter SRB = 0;
   // ALttP randomizer (z3randomizer msu.asm) audio pack: empty .msu, pack detection, a 64-track
   // fallback scan, resume, fades
@@ -35,7 +35,7 @@ module tb_msu;
   localparam string BASE = "/Assets/snes/common/msu.packs/Game.v1";
 
   localparam integer MSU_SIZE = Z3R ? 0 : VIDEO ? 700000 : SRB ? 300000 : STREAM ? 40000 : 3001;
-  localparam integer T2_SAMPLES = 3000;  // tracks under 2KB hit an upstream msu_audio quirk (docs/MSU-1.md)
+  localparam integer T2_SAMPLES = 3000;  // tracks under 2KB hit an upstream msu_audio quirk
   localparam integer T34_SAMPLES = 3000;
   localparam integer T34_LOOP = 500;
   localparam integer T1_SAMPLES = 700;  // 2 full sectors + a partial one

@@ -175,8 +175,6 @@ try {
         }
     }
 
-    $guide = Join-Path $Src "MSU1-INSTALL.md"
-    if (Test-Path -LiteralPath $guide) { Install-File $guide "MSU1-INSTALL.md" }
     # ROMs and MSU-1 packs go here, shared with agg23.SNES
     if (-not $DryRun) { New-Item -ItemType Directory -Path (Join-Path $SD "Assets/snes/common") -Force | Out-Null }
 
